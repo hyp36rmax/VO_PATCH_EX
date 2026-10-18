@@ -44,7 +44,9 @@ committed as `net/dpctrl.dll`.
 regenerates `UI_REFS` in `tools/uibuild.py` and drives the build-mapping
 tools (`vomap`, `votrans`, `hiresport`); `python3-unicorn` runs the
 resolution blob in the `uiemu` check; the `ui` check compares a
-fingerprint only where nasm is absent.
+fingerprint only where nasm is absent. Pillow bakes the bosses' portraits
+(`tools/portraits.py`) and is what the `portraits` check compares with;
+without it that check passes with a note.
 
 xvfb is the display the `gui` check needs; without it that check skips
 itself and says so.
@@ -75,6 +77,8 @@ python3 net/build.py              # only if you touched net/ - recompiles the DL
 python3 tools/uibuild.py          # only if you touched asm/ui.asm - the resolution blob;
                                   # then the other builds' tables and the pinned
                                   # MD5s: HIRES.md, Rebuilding
+python3 tools/portraits.py        # only if you touched assets/portrait_*.png - the
+                                  # bosses' select portraits (needs Pillow)
 
 python3 tools/check.py            # the checks CI runs, in two seconds
 python3 v-on-patcher.py               # does the window still open?
@@ -114,6 +118,7 @@ wrong on the build it is for; before tagging, give all four.
 | `asm` | `asm/` reassembles to the committed blobs, every blob links for every build, and the two placeholders the apply-time sections fill occur exactly once each |
 | `ui` | `asm/ui.asm` matches the committed resolution blob: reassembled with nasm when it is installed (always, on CI), by the recorded fingerprint of the source when it is not |
 | `net` | `net/dpctrl.dll` was built from the current `net/dpctrl.c`, by hash - two mingw versions do not produce identical bytes - and is the file `v-on-patcher.py` expects |
+| `portraits` | `portraits.py --check`: the bosses' select portraits in `v-on-patcher.py` are what `assets/portrait_*.png` bake to. Without Pillow it says so and passes, having tested nothing; CI has Pillow |
 | `disc` | `disctest.py`: the disc reader, on ISO9660 images the test builds itself - one per sector layout, plus a cue that names the wrong one. Extraction is byte-exact, the `ssp.ini` rules give the retail and OEM file lists, and every refusal names what is wrong. Needs no game and no disc, so CI runs it |
 | `gui` | `guitest.py`: the window, opened under xvfb and driven without its loop - which button is offered for which source, that a copy holds both down until it finishes, and that the two columns end level whatever is open. None of these raise on their own, so each asserts the property. Needs a display; with none it skips and prints a note rather than passing quietly |
 | `lint` | pyflakes |
@@ -121,6 +126,7 @@ wrong on the build it is for; before tagging, give all four.
 | `tree` | nothing regenerated was left uncommitted. Skipped outside CI, where it would fail on every edit in progress |
 | `offsets` | `selftest.py`: every `original` column against a real file, hundreds of patch combinations applied, and the fully patched MD5, on whichever build the file is |
 | `banner` | `bannertest.py`: the title prompt decodes back to the bitmap it was written from, and both files restore byte for byte, on whichever build the folder holds |
+| `portrait` | `portraittest.py`: the bosses' select portraits read back out of `escrgame.bin` from the slots the blob's row builder names, both files restore byte for byte, the patch alone writes no `bosses.bin`, and unticked it appends no section, on whichever build the folder holds |
 | `credit` | `credittest.py`: the credit line recomposes out of the patched roll files, and both restore byte for byte. The line is spread over three files that have to agree - the block list in the executable, the cells in `scrstfmp.bin`, the tiles in `scrstfcg.bin` - so it patches a copy, walks the block list the way `0x448d39` does, expands the cells back through the tile sheet and compares the pixels against the bitmap the patcher started from |
 | `uiemu` | `uiemu.py`: the resolution blob run under Unicorn on the retail exe, patched in memory at 1080p. Checks the plane B walker with a photo block in the ring, the HUD spread's 2D and polygon positions, the pre-fill, and the layouts' insets and scales. Needs nasm and python3-unicorn, and says so when it has neither |
 
@@ -180,11 +186,14 @@ python3 tools/assets.py
 
 ## Where the blobs live
 
-Every blob but two is in the annex: a section, `.vojp`, appended before
+Every blob but three is in the annex: a section, `.vojp`, appended before
 any patch is written, executable, and filled through the site table like
 any other site. Where it lands is fixed by the file's own headers, so its
 addresses are known at import and nothing is relinked at apply time. The
-two exceptions are places the game itself reaches - the F7 device list's
+bosses blob is too big for it and gets a section of its own, `.vobs`,
+appended after the annex only when its box is ticked (`OWN_SECTIONS`);
+its place follows from the annex's, so it links at import as well. The
+other two exceptions are places the game itself reaches - the F7 device list's
 own run in `.data`, and the levers routine written straight after the
 XInput routine - and those are the `caves` table of each `Build`.
 
@@ -406,6 +415,9 @@ well-formed and wrong on one build only:
 - a match to the win screen, and the replay after it
 - the F5, F7 and F11 dialogs, and a deadzone edit that survives a restart
 - the ending credits and the initials screen after them
+- with **Playable bosses** on, a game as each boss: the select, a match
+  to the win screen and its replay, a continue, and the unlock screens
+  with `bosses.bin` deleted first
 - the pad's soft reset, from a match and from a two-player match, since it
   runs the game's own teardown from wherever you are
 - one matchcode match against a second machine, direct and forced through

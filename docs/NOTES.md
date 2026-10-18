@@ -28,6 +28,7 @@ replacement rather than a patch, see [net/](../net/).
 | **Version and credit in the game** | `0x1fcec8`, `0x1fcecc`, `0x2bbb54`, `0x1c5900`, `scrstfcg.bin`, `scrstfmp.bin` | the roll is a list of blocks, 12 bytes each as (flag, width, height) in cells, read from `0x6bcd48` and placed on 51 cells by the flag - `0x448e86` centres, `0x448f54` pushes flush right, and the roll's own text uses the latter where these two use the title's centring; the five blank spacers after the title become five entries carrying the same twenty rows with the lines centred in them, so nothing below moves and the roll keeps its length, the cells go into `scrstfmp.bin` at the same point, and the tiles on the end of `scrstfcg.bin`, whose indices the loader rebases at `0x483d9d`; the loader reads both files to byte counts held at `0x5fdac8` and `0x5fdacc` rather than to their size, so the two constants grow with them; separately, the load before the surface flip is diverted through a stub that prints the version in the corner of the title screen, in the tile font |
 | **Intro, loading and ending screens** | `0x14dc42`, `0x23f`, `0x2c7678`, `0x18fc25`, `0x0d60c8`, `0x1c58e7` | placement routine calls a stub in the annex, which measures the window through cnc-ddraw's own bypass export and sends a destination rect; loading string's first byte → `NUL`; credits handler's opening write calls a stub that puts the sequence past its last phase once A has been held a second, read from the key buffer slot since the press edges are not maintained in that state; the initials screen's two trigger tests replaced by a stub that adds the same slot; the call before the surface flip diverted through a stub that draws HOLD TO SKIP while the button is down |
 | **Native widescreen** | about 260 sites across `.text`, `.data` and `.rsrc`, appended `.vohr` section | every 640x480 assumption rewritten for the new size - mode setting, the viewport globals and row maths, the rasterizers' row tables and coverage mask, the projection scale, the polygon pool, the GDI text bounds and fonts, the F5 split labels; the 2D layer redirected through a canvas in the new section and composited back at scale; F4 switches to 1280x720 and back through a site table the blob copies at runtime; the ending letterbox skipped, the roll's edge clipping wired up and the tile planes' row-table overruns bounded, the roll window shifted to enter at the bottom, the strip watermarks floored and the roll's cut moved so the last line leaves; the enemy marker's window and the hangar's widened to the view. Translated onto the other three builds by table |
+| **Playable bosses** | `0x1c5b79`, `0x1c5bbb`, two confirm stores (`0x19f8c1`, `0x1a0e84`), the palette loader's `jg` at `0x0f29a5`, 168 more hooks (asm/bosses.asm), `.rdata` made writable for the portrait frame's x, appended `.vobs` section | the 1P select's row extended past Raiden to the unlocked bosses (row, marks, frame and portraits shifted left, the countdown 20 seconds longer), the bosses drawn there lit in palette rows of their own, borrowed and given back; confirm on a boss stores it; the palette loaders give the boss the colour pair it was given; unlocks earned on Very Hard without a lost match, shown on a screen of their own in the report's state and kept in `bosses.bin` (**Pre-unlock the bosses** writes it with both); PLAYER DATA's turning model drawn from the boss's own fight object, the round's animation loads, the ending, the win camera's distance, Z-Gradt's camera and Z-Gradt against Z-Gradt rerouted for ids 8 and 9. See *Playable bosses* below |
 
 Bold entries are not part of original VO_Patch. Offsets are the English
 retail build's, the ones the site table is keyed on; the other builds map
@@ -670,10 +671,13 @@ phase machine on `0x1ad0964`: 0 and 1 are the ending cutscene and the
 mission complete screen, 2 is the roll, anything else falls through to a
 tail that stops the music and moves on.
 
-The one a finished game reaches is state 32 of the main-game machine
-`0x1ef9eb0`, whose draw table is `0x606fa0`; entry 32 is `0x44a523`, a
-phase machine on `0xbf073c` that runs the roll through `0x4489d6` in its
-phase 2. The title machine's logic table is `0x5ff1c0`.
+The second player's machine `0x1ef9eb0` has the same sequence as its
+state 32: its draw table is `0x606fa0`, entry 32 is `0x44a523`, a phase
+machine on `0xbf073c` that runs the roll through `0x4489d6` in its phase
+2. Its tick, `0x40f528`, is only called from the loop's two-player branch
+(`0x5c61dd`), so a finished one-player game reaches the roll through the
+title machine's `0x20`, as the Credits button does. The title machine's
+logic table is `0x5ff1c0`.
 
 Both read the same block list and the same map, so the credit line lands in
 either; only the scenery behind them differs. Skipping is one write,
@@ -749,3 +753,34 @@ the JPRE/OEM porting attempt - what broke, what it taught, and the
 per-build addresses recovered - are in docs/HIRES.md. The other three
 builds' tables are generated by tools/hiresport.py and spliced into
 v-on-patcher.py between the PORT TABLES markers.
+
+### Playable bosses
+
+Lives in asm/bosses.asm, one blob in a section of its own, `.vobs`. The
+patcher appends the section only when the box is ticked. An unticked run
+leaves the executable as the other patches alone would.
+
+The game already runs the bosses as fight objects: the initials demo
+fights 8 against 9. The patch is one hook at each place the game only
+ever did with the eight. Those are the select's row and its tables (eight
+long, made ten), the palette loaders (ids above 7 sent to a fixed table),
+the report's turntable, the round's animation loads, the ending, the win
+and replay cameras, and Z-Gradt against Z-Gradt on the last stage. On
+that stage both share one model header and one block of AI state, so the
+player's gets a copy of each. The state is a run of globals from
+`BS_BSSA`, `BS_AIDW` dwords long. The seven the patch sets are at the
+build's own offsets, `BS_AI*`, because the rerelease lays them out apart
+from the other three.
+
+A one-player game runs on player 1's copy of the fight machine only. The
+other copy's tick, `0x40f528`, is called from the loop's two-player
+branch alone. So every hook is player 1's. Whether the player is a boss
+is one flag, `boss`, set at confirm in one player only.
+
+The unlocks are kept in `bosses.bin` beside the game, a dword: 0 none, 1
+Jaguarandi, 2 both. The select's portraits of the bosses are tiles in
+`escrgame.bin`, written with the title banner's (`BOSS_ICON_TILES`). They
+are drawn from assets/portrait_*.png by tools/portraits.py. The select
+draws a boss in two palette rows it leaves alone otherwise, saved as it
+opens and put back as a launch starts. How the game picks a palette row,
+and the rest of the design, is in docs/BOSSES.md.

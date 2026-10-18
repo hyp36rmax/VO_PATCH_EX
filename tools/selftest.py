@@ -26,10 +26,10 @@ import sys
 # Everything ticked, per build: retail, the Japanese rerelease, the OEM,
 # the Japanese original.
 EXPECTED_ALL = {
-    'a464b0ff32d5bab499f265e45658504e': '4c9ba9fa514ba7a2c4a3c1b989ff719c',
-    'd19320bdc3381a48228990907910a391': '0180355d2a61697dc661f5cad735837e',
-    '4c70f780a7f0d98d74be62304fb99021': 'c4cf5d54055c3c906f26182a0e62868d',
-    '9764d946ffc8cee94788707c91753478': '9d8f0a3cff422ec2ff296abcb6385fa2',
+    'a464b0ff32d5bab499f265e45658504e': '656e33e0043ecce0f5c056058d1ad792',
+    'd19320bdc3381a48228990907910a391': 'c4873ee95694fa413131748a33126ba9',
+    '4c70f780a7f0d98d74be62304fb99021': '1aa855a7ee360a90566e8a9c112b620d',
+    '9764d946ffc8cee94788707c91753478': '43b1ab156eb91c5bfabf7410ca7e5d70',
 }
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -89,6 +89,9 @@ def apply(vp, original, keys, build):
     buf, _applied, skipped = vp.apply_selected(bytearray(original),
                                                dict.fromkeys(keys, True),
                                                build)
+    # Skipped as it should be: a patch whose prerequisite is not ticked.
+    skipped = [(key, why) for key, why in skipped
+               if key not in vp.NEEDS or vp.NEEDS[key] in keys]
     if skipped:
         raise AssertionError('skipped %s: %s' % (skipped[0][0], skipped[0][1]))
     return buf
