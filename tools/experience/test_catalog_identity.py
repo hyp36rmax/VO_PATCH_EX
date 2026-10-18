@@ -3,6 +3,8 @@ import ast,hashlib,json,struct,sys,zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'dual_display'))
 import startup_image as s
+from functools import cache
+s.mode_profiles.engineering3840.load_private=cache(s.mode_profiles.engineering3840.load_private)
 catalog=Path(sys.argv[1]);v=s.mode_profiles.engineering3840.load_private()
 index=json.loads((catalog/'catalog.json').read_text())
 rows=[ast.literal_eval(line.rstrip(',').replace('{','[').replace('}',']')) for line in (catalog/'game_profiles.h').read_text().splitlines() if line.startswith('{0x')]
@@ -15,8 +17,9 @@ count=0
 with zipfile.ZipFile(catalog/'recipes.zip') as archive:
  for folder in map(Path,sys.argv[2:]):
   raw=(folder/'v_on.exe').read_bytes();edition=v.BUILDS[hashlib.md5(raw).hexdigest()]
-  for mask in range(256):
+  for mask in range(1 << len(index['keys'])):
    wanted=dict.fromkeys(v.ESSENTIAL,True);wanted.update({key:bool(mask&(1<<i)) for i,key in enumerate(index['keys'])})
+   wanted['bossunlock']=False
    original,_,skipped=v.apply_selected(bytearray(raw),wanted,edition);assert not skipped
    if wanted.get('credits'):v.stamp_version(original,edition)
    recipe=json.loads(archive.read(f'{edition.short}/{mask}.json'))

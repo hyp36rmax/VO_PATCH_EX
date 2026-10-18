@@ -43,11 +43,16 @@ def main():
  notices=out/'Licenses';notices.mkdir();shutil.copy2(ROOT/'LICENSE',notices/'Pairomaniac-MIT.txt');shutil.copy2(a.wrapper/'LICENSE',notices/'cnc-ddraw-MIT.txt');shutil.copy2(internal/'LICENSE.txt',notices/'Python.txt')
  shutil.copy2(HERE/'ci/licenses/certifi-LICENSE.txt',notices/'certifi-LICENSE.txt')
  shutil.copy2(a.wrapper/'MinGW-runtime.txt',notices/'MinGW-runtime.txt')
+ (notices/'Playable-Bosses.txt').write_text('Playable Bosses by Vortyne, from Pairomaniac\'s V-On Patcher.\nVO PATCH EX integration and expansions by hyp36rmax.\nUpstream source: https://github.com/pairomaniac/v-on-patcher\nPinned commit: 4ecae6237e1fc432c0be2f2b0aeab5303120e444\nBoss portraits are pixel art after SEGA renders of SEGA characters.\nThe MIT license covers patcher code, not SEGA characters, game assets or trademarks.\n')
  (out/'READ-ME.txt').write_text('VO PATCH EX ' + RELEASE_VERSION + ''' — PRIVATE WINDOWS UAT
 
 Use your original Virtual-On disc image/files with the supplied v-on-patcher.exe.
 If the game is already patched, use Restore Original before Apply.
 Use the existing ISO/file selection and patch options; click Apply as usual.
+B01 adds optional Playable bosses (off by default) and Pre-unlock the bosses.
+Pre-unlock requires Playable bosses. Jaguarandi and Z-Gradt are single-player
+only. Z-Gradt's laser uses Dash/turbo. Unlocks in bosses.bin survive Restore.
+This private candidate requires Windows gameplay acceptance; it is not a release.
 Launch the installed v_on.exe normally. No special game launcher is required.
 
 F5 Graphic Settings -> Display... selects Single, Dual Versus or Dual Mirror,

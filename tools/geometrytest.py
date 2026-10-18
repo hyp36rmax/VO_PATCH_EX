@@ -116,6 +116,7 @@ def images(vp, old, path):
         for m in (old, vp):
             build = m.BUILDS[md5]
             wanted = dict.fromkeys(m.by_key(build), True)
+            wanted.update(bosses=False, bossunlock=False)
             wanted['hires'] = size
             if size in ((640,480), (1024,768)):
                 # Existing S01 cannot pair 4:3 with its default 16:9 alternate:
