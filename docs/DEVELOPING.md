@@ -53,9 +53,10 @@ itself and says so.
 
 Versions, as measured rather than promised: nasm 2.14.02, 2.15.05,
 2.16.01 through 2.16.03 and 3.02 all assemble `asm/ui.asm` to the
-committed bytes - the one construct where 3.x changed its output, the
-prefix order on `rep stosw`, is pinned in the source - and the full
-`asm` check is green under 2.16.01 and 3.02. Older nasm is untested.
+committed bytes - the constructs where 3.x changed its output, the
+prefix order on `rep stosw` and `rep movsw` and `movsx eax, ax` shortened
+to `cwde`, are pinned in `asm/ui.asm` and `asm/bosses.asm` - and the
+full `asm` check is green under 2.16.01 and 3.02. Older nasm is untested.
 capstone 4.0.2 and 5.0.7 regenerate identical `UI_REFS`. pyflakes and
 python carry no floor anyone has hit.
 

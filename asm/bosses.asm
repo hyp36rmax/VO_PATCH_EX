@@ -2110,7 +2110,9 @@ selrow_make:
         imul    edi, ebx, SEL_ROWW * 2
         add     edi, selrow
         mov     ecx, SEL_ROW
-        rep movsw
+        db      0xf3                ; rep, by hand: nasm 3.x writes the
+        movsw                       ; 66 before the f3, 2.x after, and
+                                    ; the blob must not depend on which
         imul    esi, ebx, SEL_ICON
         add     esi, SEL_ICONW
         xor     ebp, ebp            ; the boss, 0 Jaguarandi
@@ -2135,7 +2137,8 @@ selrow_make:
         loop    .tile
         ret
 .blank: mov     ax, dx
-        rep stosw
+        db      0xf3                ; rep, pinned; see above
+        stosw
         ret
 
 ; The row of ten portraits fits a standard-definition screen only once
@@ -2684,7 +2687,9 @@ zlock:
         fistp   dword [zl_ang]
         mov     eax, [zl_ang]
         sub     ax, [BS_OBJA + ZL_FACING]
-        movsx   eax, ax             ; the way round that is shorter
+        cwde                        ; movsx eax, ax, the way round that is
+                                    ; shorter; nasm 3.x makes it this and
+                                    ; 2.x does not, so it is written so
         cmp     eax, ZL_STEP
         jle     .lo
         mov     eax, ZL_STEP
