@@ -136,6 +136,35 @@ HAND = {'d19320bdc3381a48228990907910a391': ({           # Japanese rerelease
     0x0009703f: 0x00095b9c,                           # bind page fill: the letter loop entry;
                                                       # its bytes also occur in another function
     0x0000023f: 0x0000023f, 0x000000a8: 0x000000a8,   # PE header: same section order, same field
+    # bosses: the select's launch and lineup, the palette event handler, the
+    # chase camera and Z-Gradt's clone are compiled differently here; their
+    # sites placed by the references each table has, in order, and by the
+    # instructions around each hook
+    0x0000594e: 0x000a421f, 0x00061070: 0x00032be0,
+    0x000f3e48: 0x000f0e98, 0x000f3ecd: 0x000f0f1d,
+    0x000f3f3d: 0x000f0f8d, 0x000f3fcd: 0x000f101d,
+    0x00110109: 0x0010c691, 0x0011297d: 0x0010ef6d,
+    0x001129f8: 0x0010efe8, 0x00112a2c: 0x0010f01c,
+    0x00112a60: 0x0010f050, 0x00189e7e: 0x00185256,
+    0x0019bf93: 0x00196d93, 0x0019bff7: 0x00196df7,
+    0x0019c6ab: 0x001974ab, 0x0019d8e5: 0x001986e5,
+    0x0019dc03: 0x00198a03, 0x0019dd4a: 0x00198b4a,
+    0x0019df8a: 0x00198d8a, 0x0019e0c2: 0x00198e92,
+    0x0019e0f9: 0x00198ec9, 0x0019e209: 0x00198fd9,
+    0x0019e241: 0x00199011, 0x0019e3f8: 0x001991c8,
+    0x0019e590: 0x00199360, 0x0019e728: 0x001994f8,
+    0x0019e8cf: 0x0019969f, 0x0019eae2: 0x001998b2,
+    0x0019f6a5: 0x0019a43d, 0x0019f6f4: 0x0019a48c,
+    0x0019f71e: 0x0019a4b6, 0x0019f780: 0x0019a518,
+    0x0019f7aa: 0x0019a542, 0x0019f8bd: 0x0019a655,
+    0x0019f8c1: 0x0019a659, 0x0019f8ec: 0x0019a684,
+    0x0019f91f: 0x0019a6b7, 0x0019f9c1: 0x0019a759,
+    0x0019fc26: 0x0019a9be, 0x0019fc2c: 0x0019a9c4,
+    0x0019fc3d: 0x0019a9d5, 0x0019fc64: 0x0019a9fc,
+    0x0019fc97: 0x0019aa2f, 0x0019fccb: 0x0019aa63,
+    0x001a0c81: 0x0019ba19, 0x001a0e80: 0x0019bc18,
+    0x001a0e84: 0x0019bc1c, 0x001a0eaf: 0x0019bc47,
+    0x001a0ee2: 0x0019bc7a, 0x001d39b1: 0x001ce241,
 }, {
     0x0049776e: 0x004962cc, 0x004977c6: 0x00496324,   # kbpage: 2P-key check labels
     0x00497c70: 0x004967cd, 0x00497cb0: 0x0049680d,   # pagesec: bind page loop heads
@@ -147,6 +176,10 @@ HAND = {'d19320bdc3381a48228990907910a391': ({           # Japanese rerelease
     0x000958aa: 0x0009574a,                           # jmp +0 at loop exit
     0x006035ac: 0x00602fac,                           # .rsrc, whole section is -0x600
     0x0000023f: 0x0000023f, 0x000000a8: 0x000000a8,   # PE header: same section order
+    0x0019f8c1: 0x0019f391, 0x001a0e84: 0x001a0954,   # bosses: confirm, in functions
+                                                      # that do not align
+    0x0000594e: 0x0000594e,                           # bosses: Z-Gradt's clone
+    0x000f3e48: 0x000f3ce8, 0x000f3ecd: 0x000f3d6d,   # bosses: Z-Gradt's gold
 }, {
     0x004977c6: 0x00497664,                           # kbpage: the 2P-key accept label
 }), '9764d946ffc8cee94788707c91753478': ({            # Japanese original
@@ -156,6 +189,26 @@ HAND = {'d19320bdc3381a48228990907910a391': ({           # Japanese rerelease
     0x006035ac: 0x00601dac,                           # .rsrc: the directory is -0x1800,
                                                       # the dialog data -0x180c
     0x0000023f: 0x0000023f, 0x000000a8: 0x000000a8,   # PE header: same section order
+    # bosses: sites the map places by function but cannot align - the select's
+    # launch and the palette event handler hold jump tables, and the chase
+    # camera and Z-Gradt's clone are split differently - placed by the
+    # instructions that follow each, in order where a stretch repeats
+    0x0000593f: 0x0000593f, 0x0000594e: 0x0000594e,
+    0x000f3e48: 0x000f36d8, 0x000f3ecd: 0x000f375d,
+    0x000f3f3d: 0x000f37cd, 0x000f3fcd: 0x000f385d,
+    0x0011297d: 0x00111edd, 0x001129f8: 0x00111f58,
+    0x00112a2c: 0x00111f8c, 0x00112a60: 0x00111fc0,
+    0x0019f6a5: 0x0019e545, 0x0019f6f4: 0x0019e594,
+    0x0019f71e: 0x0019e5be, 0x0019f780: 0x0019e620,
+    0x0019f7aa: 0x0019e64a, 0x0019f8bd: 0x0019e75d,
+    0x0019f8c1: 0x0019e761, 0x0019f8ec: 0x0019e78c,
+    0x0019f91f: 0x0019e7bf, 0x0019f9c1: 0x0019e861,
+    0x0019fc26: 0x0019eac6, 0x0019fc2c: 0x0019eacc,
+    0x0019fc3d: 0x0019eadd, 0x0019fc64: 0x0019eaf2,
+    0x0019fc97: 0x0019eb24, 0x0019fccb: 0x0019eb59,
+    0x001a0c81: 0x0019fb21, 0x001a0e80: 0x0019fd20,
+    0x001a0e84: 0x0019fd24, 0x001a0eaf: 0x0019fd4f,
+    0x001a0ee2: 0x0019fd82,
 }, {
     0x004977c6: 0x00497764,                           # kbpage: the 2P-key accept label,
                                                       # its two loads the other way round
