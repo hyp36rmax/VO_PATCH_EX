@@ -26,7 +26,8 @@ no independent overlay display format is introduced.
 
 | Checkpoint | Finding or change |
 |---|---|
-| Older Unified-Overlay, `e4a2a501dd0f6dd5ca4cf5ac843875199c07662a` | Preserved ancestor of the active branch; no obsolete implementation needs to be merged again |
+| Older Unified-Overlay, `e4a2a501dd0f6dd5ca4cf5ac843875199c07662a` | Controller Expansion baseline retained as the legacy branch tip; no committed overlay implementation exists at this checkpoint |
+| `5fc3a33` | First committed private overlay foundation on the active branch ancestry |
 | `da551d2` | Activation, navigation and rendering synchronization corrections |
 | `06b261f` | Paused presentation correction and Exit to Title integration |
 | `c7a0996` | Settings integration and the frozen R04 interface record |
@@ -44,3 +45,23 @@ Physical F02 testing confirmed active-gameplay presentation without flicker.
 That result does not certify later paused composition, settings persistence,
 controller assignment or all R04 pages. These require exact-build Windows
 validation, including original F-key recovery and cancellation of pending edits.
+
+## Branch consolidation
+
+VERIFIED: the remote legacy tip `e4a2a501dd0f6dd5ca4cf5ac843875199c07662a`
+is the merge base with the reviewed active tip
+`1079312812859d0f2e082321108bc81c46838121`. The legacy side has zero unique
+commits; the active side has 58. Retiring the legacy branch reference does not
+remove historical commits or require a code merge. No tracked documentation
+file was deleted between these tips.
+
+The only removed tracked path is `v-on-patcher.spec`, superseded by upstream's
+launcher and bundled Python packaging in `af0dc5e`. Restoring that obsolete
+PyInstaller specification is UNSUITABLE for the current packaging architecture.
+
+An earlier local `experimental/overlay/` prototype remains untracked in the
+legacy checkout. It is outside the committed branch comparison and is preserved
+locally; the checkout and its local branch must not be removed as part of remote
+reference cleanup. Its runtime acceptance is UNKNOWN. Its pause-owning approach
+must not replace the current contract, which leaves pause authority with the game.
+The foundation record documents the current rendering and input decisions.
