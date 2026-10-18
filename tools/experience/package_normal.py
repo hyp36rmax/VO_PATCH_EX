@@ -1,5 +1,5 @@
 """Assemble the installable private distribution using upstream's Windows launcher."""
-import argparse,hashlib,json,os,shutil,subprocess,zipfile
+import argparse,hashlib,json,os,shutil,subprocess
 from release_version import VERSION as RELEASE_VERSION, validate_release_tag
 from pathlib import Path
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
@@ -70,6 +70,15 @@ If no logs exist, enable a level, restart and reproduce before exporting.
 Restore Original restores upstream files and owned runtime files. Display choices,
 diagnostic logs and unrelated files are retained. Modified runtime files are
 preserved and reported instead of deleted.
+
+Boss acceptance: verify both optional boxes and their dependency. Test the
+original eight machines with bosses disabled, then Jaguarandi and Z-Gradt with
+bosses enabled. Test earned unlocks separately from pre-unlock; restart and
+Restore/reapply must retain progression. Check each lever's Dash/turbo edge for
+Z-Gradt's laser, movement, weapons, replay, victory/defeat and ending. Repeat
+camera and portrait checks at each supported aspect ratio and in both dual
+presentation modes, including mixed monitor sizes. Local VS/online retain eight
+machines; this candidate does not add Local VS bosses.
 
 Movie check: use the default enabled movie patch. In Single, confirm a centered
 16:9 visible picture without distortion. In Dual Versus and Dual Mirror, confirm

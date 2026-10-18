@@ -12,6 +12,8 @@ for folder in map(Path, sys.argv[1:]):
     si.mode_profiles.engineering3840.load_private = fresh
     uncached, _ = si.build(raw, wanted)
     si.mode_profiles.engineering3840.load_private = cache(fresh)
+    private = si.mode_profiles.engineering3840.load_private()
+    private.by_key = cache(private.by_key)
     shared, _ = si.build(raw, wanted)
     again, _ = si.build(raw, wanted)
     assert uncached == shared == again, folder
