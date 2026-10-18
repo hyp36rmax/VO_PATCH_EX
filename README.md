@@ -729,11 +729,10 @@ hobby project poking at a nearly 30-year-old binary, so expect bugs.
 
 ## Credits and licence
 
-The logo and icon are the work of SirRockEmSockEm, who also took most of
-the in-game shots above. **Playable bosses** - the two bosses as player
-machines, their select, their unlock screens and their portraits - is the
-work of [Vortyne](https://github.com/Vortyne). Some of the byte edits go
-back to VO_Patch 0.43 (2008) by [UE2A-GEL](https://jaguarandi.xxxxxxxx.jp/).
+The logo, the icon and the in-game shots above are the work of
+SirRockEmSockEm. **Playable bosses** is the work of
+[Vortyne](https://github.com/Vortyne). Some of the byte edits go back to
+VO_Patch 0.43 (2008) by [UE2A-GEL](https://jaguarandi.xxxxxxxx.jp/).
 
 The game and everything in it belong to SEGA. `LICENSE` (MIT) covers the
 patcher, its tools and its documentation. It does not cover the game, the
