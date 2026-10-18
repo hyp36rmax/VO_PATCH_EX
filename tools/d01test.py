@@ -81,10 +81,10 @@ def main(path, width=2560, vp=vp):
     assert moved_hooks == 26, 'unexpected 1920 hook movement'
     for offset, value in old._ui_words(1920, 1080).items():
         assert vp._ui_words(1920, 1080)[offset] == value
-    assert old.BLOBS == vp.BLOBS, 'controller/shared annex blobs changed'
+    assert old.BLOBS == {k:v for k,v in vp.BLOBS.items() if k != 'BOSSES'}, 'controller/shared annex blobs changed'
     assert old.TANITA_DLL_SHA == vp.TANITA_DLL_SHA
     assert old.TANITA_SRC_SHA == vp.TANITA_SRC_SHA
-    keys = set(vp.by_key(build)) - {'hires'}
+    keys = set(vp.by_key(build)) - {'hires', 'bosses', 'bossunlock'}
     assert selftest.apply(old, original, keys, old.BUILDS[build.md5]) == selftest.apply(vp, original, keys, build), 'non-display generated image changed'
     print(build.short, 'CE.2: 1920 values (26 UI hooks move +8), words, blobs, helper pins and non-display image identical')
 

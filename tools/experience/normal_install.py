@@ -80,7 +80,7 @@ def bind(cls,scope,package):
                 if sha(data)!=digest:raise ValueError('Runtime integrity failure: '+name)
                 assets[name]=data
             # Snapshot every file the original Apply can change, including backups.
-            names={Path(self.exe_path).name,self.build.art[0],scope['SCRSTFCG'],scope['SCRSTFMP'],'v_on.ini','vontanita.dll'}
+            names={Path(self.exe_path).name,self.build.art[0],scope['SCRSTFCG'],scope['SCRSTFMP'],'v_on.ini','vontanita.dll',scope['BOSSES_FILE']}
             names|={n+s for n in tuple(names) for s in ('.bak','.new','.patched')}
             names|=set(assets)|{'experience-version.json'}
             for name in names:
