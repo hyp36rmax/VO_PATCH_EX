@@ -44,6 +44,19 @@ The upstream patcher remains the foundation. Its [game fixes](docs/PATCHER.md#wh
 remain available alongside the original controller profiles.
 
 
+## Playable Bosses (development branch)
+
+Optional single-player Jaguarandi and Z-Gradt support comes from **Vortyne's**
+implementation in **Pairomaniac's V-On Patcher**. **Playable bosses** is off by
+default; **Pre-unlock the bosses** requires it. Earned unlocks are stored in
+`bosses.bin` and survive Restore Original. Z-Gradt's special laser uses the
+existing Dash/turbo input. Local VS and online selection retain the original
+eight machines.
+
+This branch is an integration candidate, not a new published release. See the
+[upstream boss reference](docs/BOSSES.md) and
+[Experience integration and validation](docs/project/PLAYABLE-BOSSES.md).
+
 ## Display Expansion
 
 Configure **F5 → Graphic Settings → Display...** after installing with the original
