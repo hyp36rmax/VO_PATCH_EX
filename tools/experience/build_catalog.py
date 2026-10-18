@@ -13,6 +13,8 @@ def main():
  # read its tables. Avoid recompiling the embedded blobs for every profile.
  si.mode_profiles.engineering3840.load_private=cache(si.mode_profiles.engineering3840.load_private)
  out=a.output;out.mkdir(exist_ok=True,parents=True);v=si.mode_profiles.engineering3840.load_private()
+ # Edition-specific translated site tables are also read-only in this process.
+ v.by_key=cache(v.by_key)
  keys=list(v.EXTRA[:7]+v.ABOUT)+['bosses','bossunlock'];index={'keys':keys,'entries':{}};rows=set();count=0
  with zipfile.ZipFile(out/'recipes.zip','w',zipfile.ZIP_DEFLATED) as z:
   for folder in [a.retail,a.jpre]:

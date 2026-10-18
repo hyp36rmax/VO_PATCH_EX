@@ -6,6 +6,7 @@ import startup_image as s
 from functools import cache
 s.mode_profiles.engineering3840.load_private=cache(s.mode_profiles.engineering3840.load_private)
 catalog=Path(sys.argv[1]);v=s.mode_profiles.engineering3840.load_private()
+v.by_key=cache(v.by_key)
 index=json.loads((catalog/'catalog.json').read_text())
 rows=[ast.literal_eval(line.rstrip(',').replace('{','[').replace('}',']')) for line in (catalog/'game_profiles.h').read_text().splitlines() if line.startswith('{0x')]
 assert len({tuple(row[:3]) for row in rows})==len(rows),'ambiguous first-match identity'

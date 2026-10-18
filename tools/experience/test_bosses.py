@@ -15,6 +15,8 @@ def load(ref):
     return m
 v = selftest.load_patcher(); upstream = load(PIN); baseline = load(BASE)
 assert v.BLOBS['BOSSES'] == upstream.BLOBS['BOSSES']
+assert v.CREDITS == upstream.CREDITS
+assert v.BOSSES_AUTHOR == 'Vortyne' and v.REPO_URL == upstream.REPO_URL
 for path in ('asm/bosses.asm', 'assets/portrait_jaguarandi.png', 'assets/portrait_z-gradt.png'):
     assert (ROOT/path).read_bytes() == subprocess.check_output(['git','show',PIN+':'+path],cwd=ROOT)
 assert v.NEEDS == {'bossunlock':'bosses'}
