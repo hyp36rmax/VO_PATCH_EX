@@ -729,17 +729,17 @@ hobby project poking at a nearly 30-year-old binary, so expect bugs.
 
 ## Credits and licence
 
-Some of the byte edits come from the original VO_Patch 0.43 (2008) by
-[UE2A-GEL](https://jaguarandi.xxxxxxxx.jp/). Rights to the game belong to
-SEGA. `LICENSE` (MIT) covers the patcher, its tools and its documentation -
-not the game, not the bytes quoted from it, and not the letterforms traced
-from its artwork.
+The logo and icon are the work of SirRockEmSockEm, who also took most of
+the in-game shots above. **Playable bosses** - the two bosses as player
+machines, their select, their unlock screens and their portraits - is the
+work of [Vortyne](https://github.com/Vortyne). Some of the byte edits go
+back to VO_Patch 0.43 (2008) by [UE2A-GEL](https://jaguarandi.xxxxxxxx.jp/).
 
-The logo and icon are the work of SirRockEmSockEm, who also took the
-in-game shots above. **Playable bosses** - the two bosses as player
-machines, their select, unlock and portraits - is the work of
-[Vortyne](https://github.com/Vortyne).
+The game and everything in it belong to SEGA. `LICENSE` (MIT) covers the
+patcher, its tools and its documentation. It does not cover the game, the
+bytes quoted from it, the letterforms traced from its artwork, or the two
+boss portraits, which are pixel art after SEGA's renders of the machines.
 
 Bug reports and patches are welcome as issues and pull requests. For
-anything else - a disc image of a build the patcher does not know, or a
-question that does not fit an issue - write to pairo@segaonline.net.
+anything else, such as a disc image of a build the patcher does not know,
+write to pairo@segaonline.net.

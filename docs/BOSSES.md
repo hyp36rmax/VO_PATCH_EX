@@ -40,9 +40,10 @@ since the unpatched game never reads it.
 - An unlocked boss stands in the row after Raiden: Jaguarandi first, then
   Z-Gradt raised on the hangar's lip. A locked boss is not there at all.
 - Each boss has a portrait of its own in the row along the bottom, after
-  Raiden's. The portraits were made for the patch in the style of the
-  eight's: framed and backed the same way, at the same 48 by 64. A locked
-  boss's place stays blank.
+  Raiden's. The portraits are pixel art drawn after SEGA's renders of the
+  two machines, Z-Gradt's mirrored, in the eight's style: framed and
+  backed the same way, at the same 48 by 64. A locked boss's place stays
+  blank.
 - The portraits, the 1P/2P marks and the red frame move left to make
   room: four columns with Jaguarandi, seven with both. The row stays on a
   4:3 screen. With nothing unlocked the select is exactly the original.
