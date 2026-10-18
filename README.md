@@ -316,8 +316,8 @@ re-patching and **Restore original**.
 
 - **Machine select** - an unlocked boss stands in the row after Raiden
   with its own portrait. The row moves left to make room, and the countdown
-  runs 20 seconds longer. The Quick VR Select has them too. With Machine
-  Color Select on, a boss can wear any of the eight's colours.
+  runs 20 seconds longer. The Quick VR Select and Machine Color Select work
+  on them too.
 - **In a match** - each boss fights with its own weapons. The HUD names
   Jaguarandi's as the Sega Ages release does. Z-Gradt fires its super
   laser with Dash and has a fourth gauge for it under the other three.
