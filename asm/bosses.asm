@@ -132,7 +132,8 @@ extern BS_SELIN                 ; and its inside
 extern BS_SELTICKS
 extern BS_SLOTS                 ; files loaded: where, how much
 extern BS_LOADFILE              ; load a machine's (id, -1, 0, 1), as the select
-extern BS_MALLOC                ; the C library's
+extern BS_MALLOC                ; the C library's, and its free
+extern BS_FREE
 extern BS_FRX                   ; the portrait frame's two x doubles
 extern BS_TXTX                  ; the text cursor's column
 extern BS_PLANE                 ; the plane the portraits' marks are on
@@ -1866,7 +1867,7 @@ sel_loadrb:
         call    BS_FOPEN
         add     esp, 8
         test    eax, eax
-        jz      .out
+        jz      .free               ; no file: the block goes back
         mov     ebx, eax
         push    ebx
         push    1
@@ -1874,10 +1875,18 @@ sel_loadrb:
         push    esi
         call    BS_FREAD
         add     esp, 16
-        push    ebx
+        push    eax                 ; 1 if the whole file came, kept
+        push    ebx                 ; across the close
         call    BS_FCLOSE
         add     esp, 4
+        pop     eax
+        cmp     eax, 1
+        jne     .free               ; short: not the model, not installed
         mov     [sel_rbbuf + ebp * 4], esi
+        jmp     .out
+.free:  push    esi
+        call    BS_FREE
+        add     esp, 4
 .out:   popad
         ret
 

@@ -183,9 +183,10 @@ to Z-Gradt, which also rises onto the lip (`selstep_*`).
 The bosses' models are their fight models posed by the select's motions.
 Jaguarandi is posed through Raiden's, with its head put back on. Z-Gradt
 stands in its stance's first frame. Each file is read once into a block
-of its own (`sel_loadrb`). The game's model slot points there only while
-the boss is drawn (`sel_slotsin`, `sel_slotsout`), and the game's own
-pointer is kept and put back. The files are not appended to the game's
+of its own (`sel_loadrb`); a file that is missing or short is not
+installed, and its block is freed. The game's model slot points there
+only while the boss is drawn (`sel_slotsin`, `sel_slotsout`), and the
+game's own pointer is kept and put back. The files are not appended to the game's
 8 MB model pool, because after a full game that runs into the C runtime's
 heap. The game's own copy of the file, present on a continue's select, is
 never drawn here. `selcol` turns the colour words of the polygons it
