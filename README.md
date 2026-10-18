@@ -136,12 +136,10 @@ Then put the `.cue` in **Source**. On Linux a drive can also go straight in
 **Source** for the soundtrack rip, though not for the install; see
 [Music](#music).
 
-### What it copies
-
-The game directory and the chosen manual, nothing else. No `v_on.ini` is
-written: the game makes its own on first run, and with **Better defaults**
-applied it is a good one. How the copy rules are read off the disc is in
-[NOTES.md](docs/NOTES.md#installing-from-a-disc-image).
+The install copies the game directory and the chosen manual, nothing else.
+No `v_on.ini` is written: the game makes its own on first run, and with
+**Better defaults** applied it is a good one. How the copy rules are read
+off the disc is in [NOTES.md](docs/NOTES.md#installing-from-a-disc-image).
 
 ## What the patches do
 
@@ -149,12 +147,12 @@ applied it is a good one. How the copy rules are read off the disc is in
   <img src="assets/readme/patched-game.png" alt="Patched game" height="160" />
 </p>
 
-**Essential** fixes what is broken on modern systems and is always applied.
-Without it the game does not start, crashes when you lose a round, runs at a
-third of the frame rate, or loses the keyboard after ALT+TAB.
-
-**Extra** is down to taste. Untick what you do not want. How every patch
-works inside the game is in [NOTES.md](docs/NOTES.md).
+**Essential** is always applied: without it the game does not start,
+crashes when you lose a round, runs at a third of the frame rate, or loses
+the keyboard after ALT+TAB. **Extra** is down to taste; untick what you do
+not want. Every patch works with every other, on all four
+[builds](#builds), and with cnc-ddraw. How each works inside the game is in
+[NOTES.md](docs/NOTES.md).
 
 ### Essential
 
@@ -231,17 +229,14 @@ missing, the whole box is skipped and everything else still applies.
 
 ### Add-ons
 
-Open the collapsed **ADD-ONS** header and press **Install** on a row. The
-same button reads **Remove** once installed.
+Open the collapsed **ADD-ONS** header and press **Install** on a row; the
+same button reads **Remove** once installed. The rows are
+[Internet play](#internet-play) and
+[Windowing and scaling](#windowing-and-scaling-cnc-ddraw).
 
 <p align="center">
   <img src="assets/readme/add-ons-section.png" alt="ADD-ONS section" height="360" />
 </p>
-
-| Row | What it is |
-| --- | --- |
-| **Internet play** | two-player versus over the internet. Both players need it. See [Internet play](#internet-play) |
-| **Windowing and scaling** | downloads and installs cnc-ddraw beside the game. See [Windowing and scaling](#windowing-and-scaling-cnc-ddraw) |
 
 ## Native widescreen
 
@@ -249,7 +244,10 @@ The game draws everything at 640x480 and assumes that size everywhere, so
 scaling the picture up only makes it bigger. This patch makes the game
 render at 1920x1080 itself. The 3D view, the menus, the HUD and the text are
 all drawn at that size, and the wider view shows more of the arena at the
-sides rather than stretching the middle.
+sides rather than stretching the middle. It is **on by default**; untick it
+for the original 640x480. The game still asks for exclusive fullscreen, so
+for a window at that size add cnc-ddraw under
+[Windowing and scaling](#windowing-and-scaling-cnc-ddraw).
 
 <p align="center">
   <img src="assets/readme/widescreen-match-1p.png" alt="Widescreen match, 1P" width="49.5%" />
@@ -261,8 +259,6 @@ sides rather than stretching the middle.
   <img src="assets/readme/widescreen-next-enemy.png" alt="Widescreen NEXT ENEMY screen" width="49.5%" />
   <img src="assets/readme/widescreen-2p-machine-select.png" alt="Widescreen two-player machine select" width="49.5%" />
 </p>
-
-It is **on by default**. Untick it for the original 640x480.
 
 ### What changes
 
@@ -281,15 +277,6 @@ It is **on by default**. Untick it for the original 640x480.
   The ending credits lose their black bands and roll across the whole
   screen.
 
-### Works with everything else
-
-It works with every other patch and with cnc-ddraw, which is what gives you
-windowed or borderless play at that size; see
-[Windowing and scaling](#windowing-and-scaling-cnc-ddraw). It applies to all
-four [builds](#builds). On the USA OEM and Japanese builds it has had less
-play; if something looks wrong there, say which build in the report. The
-window names it.
-
 ## Playable bosses
 
 Jaguarandi and Z-Gradt are the game's two bosses. This patch lets you play
@@ -304,7 +291,10 @@ fixes every screen the game drew for the eight only.
 </p>
 
 It is **unticked by default**, because it changes the game rather than
-fixes it. **Pre-unlock the bosses** beside it skips the earning.
+fixes it. **Pre-unlock the bosses** beside it skips the earning. It is one
+player only, on purpose: the bosses are far stronger than the eight, so
+two-player and internet play keep the select to the eight.
+[BOSSES.md](docs/BOSSES.md) has the full account.
 
 ### Unlocking
 
@@ -341,13 +331,6 @@ re-patching and **Restore original**.
   <img src="assets/readme/match-jaguarandi.png" alt="Jaguarandi in a match against Z-Gradt" width="49.5%" />
   <img src="assets/readme/laser-z-gradt.png" alt="Z-Gradt firing its laser cannon, the fourth gauge under the three" width="49.5%" />
 </p>
-
-### Works with everything else
-
-It works with every other patch, on all four [builds](#builds), and with
-cnc-ddraw. It is one player only, on purpose: the bosses are far stronger
-than the eight, so two-player and internet play keep the select to the
-eight. [BOSSES.md](docs/BOSSES.md) has the full account.
 
 ## Gamepad
 
@@ -392,9 +375,8 @@ bindable: it always moves, which is what the menus read.
 The on-screen prompts follow the pad: the pause screen reads **PRESS START
 TO UNPAUSE**, and the title and scoreboard screens read **Press A Button**.
 
-Applying the patch moves `v_on.ini` aside, because binds saved by the
-unpatched game do not fit the new device list. See
-[What gets written](#what-gets-written).
+Applying the patch moves `v_on.ini` aside, since the old binds do not fit
+the new device list; see [What gets written](#what-gets-written).
 
 ### Gamepad (XInput)
 
@@ -485,9 +467,8 @@ still there for LAN play.
     ```
 
 - **Both players need Fix frame rate and Fix crash on round loss.** Both
-  are Essential, so a game patched with this release always has them; a
-  copy from an older patcher may not. A mismatch is refused with a note
-  saying so. Nothing else has to match.
+  are Essential, so only a copy from an older patcher can lack them, and a
+  mismatch is refused with a note saying so. Nothing else has to match.
 
 ### Playing with a code
 
@@ -550,7 +531,9 @@ bug report.
 
 The BGM is CD audio, so unpatched the game needs a disc or a virtual drive
 with the audio tracks; a data-only ISO plays nothing. **No disc required**
-reads the music from WAV files beside the game instead.
+reads the music from WAV files beside the game instead. With `music\`
+missing or empty it reads the drive as before, and under Wine the files
+play without any `dosdevices` entry, raw device link or cdemu instance.
 
 ### Ripping the tracks
 
@@ -581,13 +564,6 @@ VIRTUAL-ON\
 
 Track 1 is the data track and has no file. The numbering must match the
 disc, because the game asks for tracks by number.
-
-### At runtime
-
-With **No disc required** unticked the folder is ignored. With it on and
-`music\` missing or empty, the game reads the drive as before; with tracks
-there, they are used, disc or no disc. Under Wine they play without any
-`dosdevices` entry, raw device link or cdemu instance.
 
 ## Windowing and scaling (cnc-ddraw)
 
@@ -654,7 +630,8 @@ gamescope -W 1920 -H 1080 -w 640 -h 480 -f -S integer -- %command%
 ## Builds
 
 Four builds of the game exist, and every patch works on all four. The
-window names the build it is looking at.
+window names the build it is looking at; say which in a bug report, since
+the English retail build has had by far the most play.
 
 | Build | Size | MD5 |
 | --- | --- | --- |
@@ -666,8 +643,7 @@ window names the build it is looking at.
 The USA, USA Alt and European discs all carry the same English retail
 `v_on.exe`, so any of them will do.
 **[The Japanese original](https://redump.info/disc/133978)** is the 1997
-1.04J pressing, also found in the Sega PC Greatest Hits Vol. 3 bundle. It
-has had the least play.
+1.04J pressing, also found in the Sega PC Greatest Hits Vol. 3 bundle.
 
 A repack, a bad rip or a copy already modified is refused, with its size
 and MD5 shown beside a supported build's. Installing and ripping work
