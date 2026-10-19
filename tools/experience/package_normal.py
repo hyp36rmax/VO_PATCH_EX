@@ -43,40 +43,8 @@ def main():
  notices=out/'Licenses';notices.mkdir();shutil.copy2(ROOT/'LICENSE',notices/'Pairomaniac-MIT.txt');shutil.copy2(a.wrapper/'LICENSE',notices/'cnc-ddraw-MIT.txt');shutil.copy2(internal/'LICENSE.txt',notices/'Python.txt')
  shutil.copy2(HERE/'ci/licenses/certifi-LICENSE.txt',notices/'certifi-LICENSE.txt')
  shutil.copy2(a.wrapper/'MinGW-runtime.txt',notices/'MinGW-runtime.txt')
- (out/'READ-ME.txt').write_text('VO PATCH EX ' + RELEASE_VERSION + ''' — PRIVATE WINDOWS UAT
+ (out/'READ-ME.txt').write_text((ROOT/'docs/releases'/(RELEASE_VERSION + '.md')).read_text())
 
-Use your original Virtual-On disc image/files with the supplied v-on-patcher.exe.
-If the game is already patched, use Restore Original before Apply.
-Use the existing ISO/file selection and patch options; click Apply as usual.
-Launch the installed v_on.exe normally. No special game launcher is required.
-
-F5 Graphic Settings -> Display... selects Single, Dual Versus or Dual Mirror,
-monitors and aspect ratio. OK saves for next launch; Cancel discards changes.
-A fresh default installation uses 16:9 Single Display. Explicitly unchecking
-high resolution starts from Original 4:3 until a saved Display choice overrides it.
-Dual mode retains high resolution when F4 requests an unsupported transition.
-Mirror includes both Local VS views; Versus separates the player views.
-
-Diagnostics are Off by default. F11 Extras selects Off/Normal/Detailed/Development.
-Restart after enabling. Off stops new collection; existing logs are retained.
-F11 Export Diagnostics... or EXPORT-DIAGNOSTICS.cmd exports only on request.
-The local return ZIP is RETURN-THIS-VO-PATCH-EX-F01-P04-F02.zip. No uploads occur.
-If no logs exist, enable a level, restart and reproduce before exporting.
-Restore Original restores upstream files and owned runtime files. Display choices,
-diagnostic logs and unrelated files are retained. Modified runtime files are
-preserved and reported instead of deleted.
-
-Movie check: use the default enabled movie patch. In Single, confirm a centered
-16:9 visible picture without distortion. In Dual Versus and Dual Mirror, confirm
-Display 1 shows the movie and Display 2 stays black. Let it finish once and skip
-it once; confirm normal presentation returns. Include different monitor sizes.
-
-Physical UAT is pending. Check normal launch, F5 OK/Cancel, restart activation,
-missing-monitor fallback, F4, F7/controllers, saved split, all three display modes,
-mixed monitor sizes, movies, exit/cleanup, export, and Restore Original.
-This package contains patch data and redistributables, not game executables/assets.
-No administrator privileges, manual INI edits or compilation are required.
-''')
  files={f.relative_to(out).as_posix():sha(f) for f in sorted(out.rglob('*')) if f.is_file()}
  (out/'PACKAGE-SHA256.json').write_text(json.dumps(files,indent=2)+'\n')
  print(out)
