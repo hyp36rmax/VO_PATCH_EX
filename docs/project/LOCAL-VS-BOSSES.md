@@ -85,3 +85,48 @@ Controller assignments, F7, movie ownership, display modes, networking,
 Apply/Restore and saved progression remain unchanged. A B03 UAT ZIP must only
 be assembled once the native extension and its tests exist; renaming B02 would
 not provide a Local VS test candidate.
+
+## Player B initialization and input (B03-P02)
+
+The pristine engine already provides more of the required path than the first
+candidate scan established. `tools/bosses/test_player_b_native.py` executes two
+bounded native slices in Retail and JPRE, without changing instructions or
+substituting callees. It refuses unrecognized executable hashes.
+
+| Contract | Retail | JPRE | Evidence |
+|---|---|---|---|
+| B combatant initializer | `4c74e6` | `4c5086` | VERIFIED through callback selection, before environment setup |
+| Initialization continuation | `4c7695` | `4c5235` | Terrain, palettes and subsequent setup are outside the fixture |
+| B machine-model table | `6070a0` | `601e30` | VERIFIED: ten entries, including both bosses |
+| Jaguarandi mode-0 callback | `4c722e` | `4c4dce` | VERIFIED: same callback choice as the original eight |
+| Z-Gradt mode-0 callback | `4c742c` | `4c4fcc` | VERIFIED: distinct callback and setup branch |
+| Z-Gradt setup entry | `5771d1` | `5724bd` | VERIFIED entry reached; its body is not executed by this fixture |
+| B logical-input decoder | `4c5772` | `4c339a` | VERIFIED through input-bank selection and initial direction decoding |
+
+The initializer takes ten arguments: combatant, opponent, object mode, machine
+identity, opponent identity, palette side, model pointer, X, Z and angle. Its
+initial slice stores identity at `+0x64`, model at `+0x6c`, opponent at `+0x74`
+and an update callback at `+4`. Both native B objects accept these values. The
+fixture covers all ten identities and modes 0, 1, 3 and 4, stopping before
+external setup work. It does not establish that every mode is a human path.
+
+For mode 0, Jaguarandi uses the existing normal-machine callback. That callback
+calls B's existing movement/update and model routine. Z-Gradt uses its separate
+setup and callback; replacing that callback with Jaguarandi's is UNSUITABLE.
+There is no evidence here that replacement player objects or duplicate combat
+systems are required.
+
+The input slice reads bank zero for mode 0 and the alternate bank for mode 3.
+This decision does not inspect machine identity. Both existing B objects were
+exercised with all ten identities and distinct bank sentinels. The other B
+object and the A player object remained unchanged in these bounded tests.
+Machine identity alone therefore does not require a new controller decoder.
+This does not prove full-match input ownership, weapon execution or camera
+routing. Modes and engine copies must not be relabeled as permanent P1/P2 IDs.
+
+Each edition passes 80 initialization-dispatch cases and 40 input-bank cases.
+These are native contract tests, not complete initialization or physical play.
+No runtime hook, selection option, recipe or UAT package is introduced by P02's
+current changes. Player B gameplay implementation remains incomplete. Next work
+must connect Local VS selection to these existing initialization paths and
+verify downstream model, weapon, collision, camera and match-lifecycle behavior.
