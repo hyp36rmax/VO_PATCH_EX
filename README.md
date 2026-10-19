@@ -13,9 +13,8 @@ independent Local VS displays and complete mirroring. Install through the suppli
 controllers in F7 and displays in F5. The original patch options and Restore
 original workflow remain available.
 
-The integrated prerelease **v0.18.0-experience.1** is being prepared; it is not
-published. See [release notes](docs/releases/v0.18.0-experience.1.md) for validation
-status and known limitations.
+For the current integrated prerelease, see [GitHub Releases](https://github.com/hyp36rmax/VO_PATCH_EX/releases).
+The [v0.18.0 release notes](docs/releases/v0.18.0.md) describe installation and compatibility.
 
 VO PATCH EX is an independent community project, not affiliated with or endorsed
 by SEGA. Original patcher logo and icon: **SirRockEmSockEm**. The header combines
@@ -113,11 +112,8 @@ locations, retention limits, disabling collection, export and deleting old logs.
 
 ## Getting Started
 
-1. For the published controller package, see [Project Status](#project-status).
-   Experience integration packages are separate: use only a reviewed **Experience**
-   Windows ZIP from the [Build workflow](https://github.com/hyp36rmax/VO_PATCH_EX/actions/workflows/build.yml).
-   Complete hosted packaging and integrated Windows acceptance remain release
-   gates; do not treat an incomplete build as an installable release.
+1. Download the complete Windows ZIP from the [published prerelease](https://github.com/hyp36rmax/VO_PATCH_EX/releases).
+   Use release assets rather than development build artifacts.
 2. Extract the complete package and keep its directory structure, including
    `_internal`, beside `v-on-patcher.exe`. The current Windows bundle includes
    its Python runtime; no separate Python installation is needed.
@@ -619,12 +615,10 @@ preserves the controller release line; **Display-Expansion** remains independent
 display development and **main** preserves the upstream foundation.
 Unified Overlay development remains separate from this prerelease.
 
-The integrated prerelease remains unpublished. Experience commit
-`49a7e7359592d71e39c576ac3c1884bb5a80bb78` passed
-[hosted CI and Windows packaging](https://github.com/hyp36rmax/VO_PATCH_EX/actions/runs/38850298893).
-Final integrated Windows acceptance remains a separate gate; see the
-[draft release notes](docs/releases/v0.18.0-experience.1.md).
-
+The integrated v0.18.0 release retains Controllers + Display Expansion and approved
+upstream movie ownership. Its [release notes](docs/releases/v0.18.0.md) distinguish
+supported configurations and installation requirements. Playable Bosses and
+Unified Overlay are not included.
 [Build artifacts](https://github.com/hyp36rmax/VO_PATCH_EX/actions/workflows/build.yml)
 are development packages, not releases. CE releases remain explicitly approved
 pre-releases. Preserve the existing

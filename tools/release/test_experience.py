@@ -13,12 +13,11 @@ class AuthorizationTests(unittest.TestCase):
         self.notes = b'test notes'
         self.record.update(artifact_sha256=guard.digest(self.payload), artifact_size=len(self.payload),
                            notes_sha256=guard.digest(self.notes))
-        self.record['windows_acceptance']['artifact_sha256'] = self.record['artifact_sha256']
         sha = self.record['application_commit']
         self.context = dict(repository=guard.REPO, event='workflow_dispatch', ref='refs/heads/Experience',
                             default_branch='Experience', sha='trusted-workflow', remote_sha='trusted-workflow',
                             workflow_ref=guard.REPO + '/' + guard.WORKFLOW + '@refs/heads/Experience',
-                            version=guard.VERSION, application_commit=sha)
+                            version=guard.VERSION, application_commit=sha, implementation_unchanged=True)
         self.run = dict(id=self.record['ci_run_id'], run_attempt=self.record['ci_run_attempt'],
                         head_sha=sha, head_branch='Experience', event='push',
                         repository={'full_name': guard.REPO}, head_repository={'full_name': guard.REPO},
@@ -63,8 +62,22 @@ class AuthorizationTests(unittest.TestCase):
         self.reject()
 
     def test_acceptance_identity(self):
-        self.record['windows_acceptance']['artifact_sha256'] = '0' * 64
+        self.record['windows_acceptance']['baseline_commit'] = '0' * 40
         self.reject()
+
+    def test_changed_implementation(self):
+        self.context['implementation_unchanged'] = False
+        self.reject()
+
+    def test_no_new_physical_claim(self):
+        self.record['windows_acceptance']['exact_artifact_physical_test'] = 'PASS'
+        self.reject()
+
+    def test_gameplay_diff_rejected(self):
+        with patch.object(guard.subprocess, 'run'), patch.object(
+                guard.subprocess, 'check_output', return_value='asm/bosses.asm\n'):
+            with self.assertRaises(ValueError):
+                guard.verify_implementation(self.record['application_commit'])
 
     def test_failed_ci(self):
         self.run['conclusion'] = 'failure'
@@ -130,8 +143,9 @@ class AuthorizationTests(unittest.TestCase):
 
     def test_committed_record(self):
         actual = json.loads(guard.RECORD.read_text())
-        self.assertEqual(actual['windows_acceptance']['application_commit'], actual['application_commit'])
-        self.assertEqual(actual['windows_acceptance']['artifact_sha256'], actual['artifact_sha256'])
+        self.assertEqual(actual['windows_acceptance']['baseline_commit'], guard.VALIDATED_BASELINE)
+        self.assertEqual(actual['windows_acceptance']['exact_artifact_physical_test'], 'NOT_RUN')
+        self.assertTrue(guard.verify_implementation(actual['application_commit']))
         self.assertEqual(guard.digest(Path('docs/releases/' + guard.VERSION + '.md').read_bytes()), actual['notes_sha256'])
 
     def test_download_api_media_types(self):

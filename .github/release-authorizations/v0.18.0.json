@@ -1,0 +1,23 @@
+{
+  "schema": 2,
+  "repository": "hyp36rmax/VO_PATCH_EX",
+  "version": "v0.18.0",
+  "title": "VO PATCH EX v0.18.0 \u2014 Controllers + Display Expansion",
+  "prerelease": true,
+  "application_commit": "36a6d81b495783de36f30b1e17023e49e0b614a2",
+  "artifact_name": "VO-PATCH-EX-v0.18.0-Windows.zip",
+  "artifact_sha256": "715908e5f52764679b330d0ff4cff72d0fcdceb3a19a9984cd93f15a9659bbc7",
+  "artifact_size": 50085773,
+  "ci_run_id": 39340727519,
+  "ci_run_attempt": 1,
+  "ci_artifact_id": 12228761397,
+  "ci_artifact_name": "v-on-patcher-36a6d81",
+  "notes_sha256": "d2c97fbe3fd3c6ad277edbc6287c4931a43b69c83d4d6a921a24443f3efcb5ae",
+  "windows_acceptance": {
+    "status": "PRESERVED_IMPLEMENTATION",
+    "confirmed_by": "hyp36rmax",
+    "baseline_commit": "55bcb76425144d3e138b19e89e4f15887a218f68",
+    "exact_artifact_physical_test": "NOT_RUN",
+    "record": "R0180 authorizes the validated boss-free Experience baseline including merged PR #5. Existing Single/Dual acceptance evidence is preserved; this version-only artifact has hosted Windows checks, not new physical hardware acceptance."
+  }
+}
