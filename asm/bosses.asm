@@ -529,9 +529,39 @@ selmax_a:
         mov     ecx, 7
         cmp     dword [GAMEMODE], 0
         jne     .c
-        add     ecx, [unl_level]    ; as far as the bosses unlocked
+        push    eax
+        call    unl_top             ; as far as the bosses unlocked
+        add     ecx, eax
+        pop     eax
 .c:     cmp     [eax * 4 + BS_SELCUR], ecx
         pop     ecx
+        ret
+
+; The cursor's step right and left, in place of `inc` and `dec [eax*4 +
+; cursor]`, two nops after each, at both copies; eax the player times
+; 21. With Z-Gradt unlocked and Jaguarandi not, Jaguarandi's bay stands
+; empty, and the cursor steps over it; a press confirms during a walk, so
+; it cannot rest there even for one.
+selinc_a:
+        inc     dword [eax * 4 + BS_SELCUR]
+        cmp     dword [eax * 4 + BS_SELCUR], JAG
+        jne     .out
+        call    selhole
+        jne     .out
+        inc     dword [eax * 4 + BS_SELCUR]
+.out:   ret
+seldec_a:
+        dec     dword [eax * 4 + BS_SELCUR]
+        cmp     dword [eax * 4 + BS_SELCUR], JAG
+        jne     .out
+        call    selhole
+        jne     .out
+        dec     dword [eax * 4 + BS_SELCUR]
+.out:   ret
+
+; ZF set when Jaguarandi's bay stands empty: Z-Gradt unlocked alone.
+selhole:
+        cmp     dword [unl_level], UNL_ZONLY
         ret
 
 ; In place of `mov eax, [eax*4 + cursor of machine]` for the cursor the
@@ -632,9 +662,8 @@ selmdl_a:
 .boss:  cmp     dword [GAMEMODE], 0 ; two players: not in the row
         jne     .none
         mov     eax, [esp + 4]      ; a boss still locked: not there
-        sub     eax, 7
-        cmp     eax, [unl_level]
-        ja      .none
+        call    unl_has
+        jnc     .none
         mov     eax, [sel_launch]   ; the other boss launching: not there
         test    eax, eax            ; (out of sight; its rows lent)
         jle     .mine
@@ -1382,15 +1411,15 @@ seljagpal:
         call    selrows_each
 .kept:  mov     ebx, JAG
         mov     esi, sel_bslots
-.boss:  lea     eax, [ebx - 7]
-        cmp     eax, [unl_level]
-        ja      .out
+.boss:  mov     eax, ebx
+        call    unl_has
+        jnc     .next               ; still locked: not there
         push    ebx
         push    esi
         call    selbosspal
         pop     esi
         pop     ebx
-        add     esi, 8
+.next:  add     esi, 8
         inc     ebx
         cmp     ebx, ZGRADT
         jbe     .boss
@@ -1751,7 +1780,8 @@ selbcol:
 ; The camera slides 20 between machines, a unit a frame; to Jaguarandi
 ; and back, 30 - it is larger - 1.5 a frame; to Z-Gradt and back,
 ; sel_zgap, and up onto the hangar's lip and back to take in Z-Gradt's
-; size. In place of `fsub` and `fadd qword [1.0]`, a nop after the call,
+; size; over Jaguarandi's empty bay (selhole) the two gaps in one walk.
+; In place of `fsub` and `fadd qword [1.0]`, a nop after the call,
 ; at the camera's place along the row and at what it looks at (the same
 ; with an e: the place, which carries both their heights); [ebp+8] the
 ; player.
@@ -1762,8 +1792,12 @@ selstep_sube:
         push    eax
         call    selcur
         cmp     eax, JAG            ; arrived at Jaguarandi from Z-Gradt:
-        jne     .row                ; down
-        push    eax
+        je      .down               ; down; or at Raiden over its empty bay
+        cmp     eax, 7
+        jne     .row
+        call    selhole
+        jne     .row
+.down:  push    eax
         mov     eax, [ebp + 8]
         imul    eax, eax, 0x54
         fld     dword [eax + BS_SELCUR + SEL_EYEY]
@@ -1791,7 +1825,10 @@ selstep_sub:
         pop     eax
         ret
 .b:     fsub    dword [sel_bstep]
-        pop     eax
+        call    selhole             ; from Z-Gradt over the empty bay
+        jne     .done
+        fsub    dword [sel_zstep]
+.done:  pop     eax
         ret
 selstep_adde:
         push    eax
@@ -1823,7 +1860,10 @@ selstep_add:
         pop     eax
         ret
 .z:     fadd    dword [sel_zstep]
-        pop     eax
+        call    selhole             ; from Raiden over the empty bay
+        jne     .done
+        fadd    dword [sel_bstep]
+.done:  pop     eax
         ret
 .b:     fadd    dword [sel_bstep]
         pop     eax
@@ -1954,7 +1994,11 @@ selinfo_a:
         call    sellines
         pop     esi
         jmp     BS_SELINFOA
-.boss:  push    ebx
+.boss:  call    unl_has
+        jc      .have
+        mov     dword [esp + 4], -1 ; still locked: the game's blanks
+        jmp     BS_SELINFOA
+.have:  push    ebx
         push    esi
         lea     ebx, [eax - JAG]
         imul    ebx, ebx, SEL_TXT
@@ -2009,7 +2053,11 @@ selqinfo_a:
         call    .lines
         pop     ebx
         jmp     BS_SELQINFOA
-.boss:  push    ebx
+.boss:  call    unl_has
+        jc      .have
+        mov     dword [esp + 4], -1 ; still locked: the game's blanks
+        jmp     BS_SELQINFOA
+.have:  push    ebx
         lea     ebx, [eax - JAG]
         imul    ebx, ebx, SEL_TXT
         add     ebx, seltxt
@@ -2140,8 +2188,9 @@ selrow_make:
         mov     ecx, SEL_ICON
         cmp     dword [GAMEMODE], 0
         jne     .blank
-        cmp     ebp, [unl_level]    ; or a boss still locked
-        jae     .blank
+        lea     eax, [ebp + JAG]    ; or a boss still locked
+        call    unl_has
+        jnc     .blank
         mov     eax, esi
 .tile:  stosw
         inc     eax
@@ -2155,7 +2204,8 @@ selrow_make:
 ; The row of ten portraits fits a standard-definition screen only once
 ; it is moved left; as the game has it, Z-Gradt's runs off the right. So
 ; in one player, with both bosses unlocked, it goes SEL_SHIFT2 columns
-; left, and with Jaguarandi alone SEL_SHIFT1, which centres its nine; with
+; left, and so with Z-Gradt alone, its bay the furthest; with Jaguarandi
+; alone SEL_SHIFT1, which centres its nine; with
 ; it the 1P/2P marks over a portrait and the frame around it. With neither
 ; unlocked all of it is where the game puts it. In place of the column
 ; steps either side of the row, `add [column], 2` before it and `add
@@ -2168,8 +2218,10 @@ selshift:                           ; eax the shift, in columns
         xor     eax, eax
         cmp     dword [GAMEMODE], 0
         jne     .out
-        cmp     dword [unl_level], 1
-        jb      .out
+        call    unl_top
+        test    eax, eax
+        jz      .out
+        cmp     eax, 1
         mov     eax, SEL_SHIFT1
         je      .out
         mov     eax, SEL_SHIFT2
@@ -2621,7 +2673,7 @@ unl_load:
         push    ebx
         call    BS_FCLOSE
         add     esp, 4
-        cmp     dword [unl_level], 2
+        cmp     dword [unl_level], UNL_MAX
         jbe     .done
         mov     dword [unl_level], 0
 .done:  popad
@@ -3009,6 +3061,37 @@ unl_ldtex:
         pop     eax
 .load:  jmp     BS_LOADTEX
 
+; The unlocks are one dword, unl_level: 0 none, 1 Jaguarandi, 2 both,
+; 3 Z-Gradt alone - the two bosses are earned apart, and the values an
+; earlier release could write keep their meaning. unl_bits has each as
+; bits, 1 Jaguarandi and 2 Z-Gradt; unl_tops how far the select's row
+; goes past Raiden, Jaguarandi's bay the first and Z-Gradt's the second;
+; unl_withjag and unl_withz what an unlock makes of it.
+UNL_MAX     equ 3
+UNL_ZONLY   equ 3
+unl_bits:   db  0, 1, 3, 2
+unl_tops:   db  0, 1, 2, 2
+unl_withjag: db 1, 1, 2, 2
+unl_withz:  db  3, 2, 2, 3
+
+; CF set when the boss in eax, 8 or 9, is unlocked.
+unl_has:
+        push    eax
+        push    ecx
+        mov     ecx, [unl_level]
+        movzx   ecx, byte [unl_bits + ecx]
+        sub     eax, JAG
+        bt      ecx, eax
+        pop     ecx
+        pop     eax
+        ret
+
+; eax how far the row goes past Raiden: 0, 1 or 2.
+unl_top:
+        mov     eax, [unl_level]
+        movzx   eax, byte [unl_tops + eax]
+        ret
+
 ; ZF set if this game can unlock: one player, Very Hard, nothing lost.
 unl_ok:
         cmp     dword [GAMEMODE], 0
@@ -3030,11 +3113,18 @@ unl_jag:
         mov     dword [BS_STATEA], ST_REPORT
         call    unl_ok
         jne     .out
-        cmp     dword [unl_level], 0
-        jne     .out
+        push    eax
+        mov     eax, JAG
+        call    unl_has
+        pop     eax
+        jc      .out                ; already
         cmp     dword [BS_CPUA + 0x64], JAG
         jne     .out
-        mov     dword [unl_level], 1
+        push    eax
+        mov     eax, [unl_level]
+        movzx   eax, byte [unl_withjag + eax]
+        mov     [unl_level], eax
+        pop     eax
         call    unl_save
         mov     dword [unl_on], JAG
         mov     dword [unl_t], 0
@@ -3048,9 +3138,12 @@ unl_z:
         mov     dword [unl_zwon], 0
         call    unl_ok
         jne     .initials
-        cmp     dword [unl_level], 1
-        jne     .initials
-        mov     dword [unl_level], 2
+        mov     eax, ZGRADT
+        call    unl_has
+        jc      .initials           ; already
+        mov     eax, [unl_level]
+        movzx   eax, byte [unl_withz + eax]
+        mov     [unl_level], eax
         call    unl_save
         mov     eax, [BS_SCNNOW]    ; the scene and textures in, for
         mov     [unl_scn], eax      ; after
@@ -4978,7 +5071,8 @@ unl_you: db     'YOU UNLOCKED', 0
 unl_press: db   'PRESS BUTTON TO CONTINUE', 0
 unl_grow: dd    0.02                ; the model's growth a frame, to
 unl_size: dd    0.9                 ; the report's size
-unl_level: dd   0                   ; unlocked: 0, 1 Jaguarandi, 2 both
+unl_level: dd   0                   ; unlocked: 0, 1 Jaguarandi, 2 both,
+                                    ; 3 Z-Gradt alone (unl_bits)
 unl_read: dd    0                   ; read yet
 unl_clean: dd   0                   ; this game can still unlock
 unl_zwon: dd    0                   ; and has won its last fight

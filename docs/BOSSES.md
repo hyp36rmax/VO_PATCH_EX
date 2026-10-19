@@ -13,8 +13,10 @@ patch does, then how.
 
 - **Jaguarandi** - beat Jaguarandi on **Very Hard** without losing a match
   earlier in the run.
-- **Z-Gradt** - with Jaguarandi already unlocked, finish the game on Very
-  Hard with any machine, without losing a match.
+- **Z-Gradt** - finish the game on Very Hard with any machine, without
+  losing a match, whether or not Jaguarandi came up on the way.
+
+The two are earned apart, in either order.
 
 A continue counts as a lost match. Changing the difficulty spoils the run.
 Only a new game from the title starts a clean one.
@@ -34,7 +36,8 @@ Jaguarandi's screen comes straight after it falls, before the Player Data
 Report. Z-Gradt's comes after the credits, before the initials. The game
 then carries on as it would have.
 
-Unlocks are kept in `bosses.bin` beside the game. They survive restarts and
+Unlocks are kept in `bosses.bin` beside the game, a dword: 0 none, 1
+Jaguarandi, 2 both, 3 Z-Gradt alone. They survive restarts and
 re-patching. **Pre-unlock the bosses** writes the file with both unlocked.
 It never takes progress away. **Restore original** leaves the file alone,
 since the unpatched game never reads it.
@@ -43,6 +46,8 @@ since the unpatched game never reads it.
 
 - An unlocked boss stands in the row after Raiden: Jaguarandi first, then
   Z-Gradt raised on the hangar's lip. A locked boss is not there at all.
+  With Z-Gradt alone, Jaguarandi's bay between stands empty and the
+  cursor steps over it, the walk taking both gaps in one.
 - Each boss has a portrait of its own in the row along the bottom, after
   Raiden's. The portraits are pixel art drawn after SEGA's renders of the
   two machines, Z-Gradt's mirrored, in the eight's style: framed and
@@ -171,8 +176,8 @@ The blob has a section of its own, `.vobs`. The patcher appends it only
 when the box is ticked, so unticked it leaves the executable as the other
 patches alone would. The blob's buffers are gathered at its end: the
 bosses' motions, the model and AI copies, the replay's ring, the saved
-palettes and the rest, 263,221 bytes. The file carries the blob only as
-far as its last byte that is not zero, 16,643 bytes. The rest is the
+palettes and the rest, 263,217 bytes. The file carries the blob only as
+far as its last byte that is not zero, 16,871 bytes. The rest is the
 section's virtual size, which Windows zeroes at load (`OWN_SECTIONS`).
 
 ### The select's row
@@ -368,7 +373,7 @@ texture bank the fights had loaded is reloaded.
 ## Testing it
 
 - `bosses.bin` beside the game: delete it to start locked, or write the
-  dword 1 or 2 to start part or fully unlocked.
+  dword 1 (Jaguarandi), 3 (Z-Gradt) or 2 (both).
 - `python3 tools/selftest.py v_on.exe` checks every site and 437
   combinations of patches, including the two boss boxes with and without
   each other. `python3 tools/portraittest.py` on the game folder reads

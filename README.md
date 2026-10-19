@@ -300,8 +300,8 @@ two-player and internet play keep the select to the eight.
 
 - **Jaguarandi** - beat it on Very Hard without losing a match earlier in
   the run.
-- **Z-Gradt** - once Jaguarandi is unlocked, finish the game on Very Hard
-  without losing a match.
+- **Z-Gradt** - finish the game on Very Hard without losing a match,
+  whether or not Jaguarandi came up on the way.
 
 A continue counts as a lost match. Each unlock gets a screen of its own.
 Both are saved in `bosses.bin` next to the game, which survives restarts,
