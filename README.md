@@ -702,6 +702,13 @@ python3 v-on-patcher.py --netplay DIR      # install the UDP netplay DLL
 python3 v-on-patcher.py --selfcheck        # validate the patch tables
 ```
 
+## Known issues
+
+- **Widescreen machine select** - the hangar floor does not reach the
+  bottom left corner. Cosmetic only.
+  - One player, after a continue on a space stage: a slice of stars.
+  - Two players, 2P's full machine select: black.
+
 ## Working on the patcher
 
 [docs/README.md](docs/README.md) maps the developer documentation:
