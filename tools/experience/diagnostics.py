@@ -174,7 +174,8 @@ def export(root, *, game_directory=None, return_name="RETURN-THIS-VO-PATCH-EX-G0
         edition = json.loads(prepared.read_text()).get('edition')
         if edition in ('retail', 'jpre'):
             versions['game'] = edition
-    payload = {'summary.json': {'versions': versions, 'physical_acceptance': 'PENDING',
+    import runtime_checkpoint
+    payload = {'runtime-state.json': runtime_checkpoint.exported(root), 'summary.json': {'versions': versions, 'physical_acceptance': 'PENDING',
                                'missing_module_logs': [k for k, v in reports.items() if not v],
                                'warnings': [e for e in events if e['event'] in ('warning', 'error', 'recovery', 'previous_session_incomplete')],
                                'assignment_evidence': 'saved configuration only; runtime ownership not inferred'},

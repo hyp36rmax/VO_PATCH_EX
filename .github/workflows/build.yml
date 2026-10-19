@@ -53,6 +53,7 @@ jobs:
           python tools/experience/test_boss_catalog.py
           python tools/experience/test_repository.py
           python tools/experience/test_diagnostics.py
+          python tools/experience/test_runtime_checkpoint.py
           python tools/experience/test_normal_lifecycle.py
 
       # The window checks need a display. xvfb is what gives them one; with

@@ -33,7 +33,7 @@ def main():
   shutil.copy2(internal/name,runtime/name)
  shutil.copytree(internal/'DLLs',runtime/'DLLs')
  (runtime/'python312._pth').write_text('python312.zip\n.\nDLLs\n')
- for name in ('normal_lifecycle.py','diagnostics.py','discovery.py','movie_geometry.py'):shutil.copy2(HERE/name,runtime/name)
+ for name in ('normal_lifecycle.py','diagnostics.py','discovery.py','movie_geometry.py','runtime_checkpoint.py','crash_evidence.py'):shutil.copy2(HERE/name,runtime/name)
  shutil.copy2(HERE/'EXPORT-DIAGNOSTICS.cmd',payload/'EXPORT-DIAGNOSTICS.cmd')
  # Package the notices for the exact dependencies selected by the build.
  assert '__version__ = "2026.07.22"' in (internal/'Lib/site-packages/certifi/__init__.py').read_text()

@@ -7,6 +7,8 @@ from pathlib import Path
 import diagnostics as d
 import discovery
 import movie_geometry
+import runtime_checkpoint
+import crash_evidence
 
 RETURN='RETURN-THIS-VO-PATCH-EX-F01-P04-F02.zip'
 STATE={'VO_EX_REQUESTED_MODE':'selected_mode','VO_EX_EFFECTIVE_MODE':'effective_mode',
@@ -84,7 +86,7 @@ def movie_state(pid):
     user.EnumWindows.argtypes=[callback,w.LPARAM]
     user.EnumChildWindows.argtypes=[w.HWND,callback,w.LPARAM]
     user.GetWindowRect.argtypes=[w.HWND,ctypes.POINTER(w.RECT)];user.GetWindowRect.restype=w.BOOL
-    found=set();visible=set();seen=set();bounds=[]
+    found=set();visible=set();seen=set();bounds=[];process_window_visible=[False]
     def visit(hwnd,unused):
         if hwnd in seen:return True
         if len(seen)>=256:return False
@@ -104,10 +106,12 @@ def movie_state(pid):
     def top(hwnd,unused):
         visit(hwnd,unused)
         owner=w.DWORD();user.GetWindowThreadProcessId(hwnd,ctypes.byref(owner))
-        if owner.value==pid:user.EnumChildWindows(hwnd,child,0)
+        if owner.value==pid:
+            if user.IsWindowVisible(hwnd):process_window_visible[0]=True
+            user.EnumChildWindows(hwnd,child,0)
         return True
     if not user.EnumWindows(callback(top),0):raise ctypes.WinError(ctypes.get_last_error())
-    return len(found),len(visible),tuple(sorted(bounds))
+    return len(found),len(visible),tuple(sorted(bounds)),process_window_visible[0]
 
 
 def attach(root,pid,event_name):
@@ -131,6 +135,12 @@ def attach(root,pid,event_name):
         def wait():
             previous=None;probe_failed=False;prior=None;ticks=0
             geometry=None
+            checkpoints=None
+            session_ms=int(time.time()*1000)
+            if d.level(root)==3:
+                try:mode=int(os.environ.get("VO_EX_EFFECTIVE_MODE", "-1"))
+                except ValueError:mode=-1
+                checkpoints=runtime_checkpoint.Checkpoints(root,pid,mode)
             while True:
                 result=k.WaitForSingleObject(process,500)
                 if result==0:break
@@ -142,22 +152,33 @@ def attach(root,pid,event_name):
                     try:prior=sample(root,prior)
                     except OSError:d.event(root,'error',{'module':5,'code':3})
                 if selected<3:continue
+                if checkpoints is None:
+                    try:mode=int(os.environ.get("VO_EX_EFFECTIVE_MODE", "-1"))
+                    except ValueError:mode=-1
+                    checkpoints=runtime_checkpoint.Checkpoints(root,pid,mode)
                 if geometry is None:geometry=movie_geometry.evidence(root,os.environ)
                 try:
                     current=movie_state(pid)
+                    checkpoints.windows(current[0],current[1],current[3])
                     if current!=previous:
                         d.event(root,'movie',{'count':current[0],'visible':current[1],
                                              'event':1 if current[1] and (not previous or not previous[1]) else 3 if previous and previous[1] and not current[1] else 2})
-                        for i,(x,y,w,h) in enumerate(current[2]):
-                            d.event(root,'movie',{'window_index':i,'window_x':x,'window_y':y,'window_width':w,'window_height':h,
-                                                 'geometry_match':not geometry['geometry_fallback'] and (x,y,w,h)==tuple(geometry[k] for k in ('expected_x','expected_y','expected_width','expected_height'))})
+                        for i,(x,y,width,height) in enumerate(current[2]):
+                            d.event(root,'movie',{'window_index':i,'window_x':x,'window_y':y,'window_width':width,'window_height':height,
+                                                 'geometry_match':not geometry['geometry_fallback'] and (x,y,width,height)==tuple(geometry[k] for k in ('expected_x','expected_y','expected_width','expected_height'))})
                         previous=current
-                except OSError:
+                except OSError as error:
+                    try:checkpoints.update(checkpoints.row['state'],error_code=getattr(error,'winerror',0) or 0)
+                    except OSError:pass  # a failed checkpoint must not affect the game
                     if not probe_failed:d.event(root,'error',{'module':4,'code':1})
                     probe_failed=True
             if previous and previous[0]:d.event(root,'movie',{'count':0,'visible':0,'event':3})
             code=w.DWORD()
             if not k.GetExitCodeProcess(process,ctypes.byref(code)):raise ctypes.WinError(ctypes.get_last_error())
+            if checkpoints and d.level(root)==3:
+                checkpoints.exited(code.value)
+                evidence=crash_evidence.collect(pid,session_ms)
+                if evidence:checkpoints.exited(code.value,evidence)
             return code.value
         return run(root,wait,ready)
     finally:

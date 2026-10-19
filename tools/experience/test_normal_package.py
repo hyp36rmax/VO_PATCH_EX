@@ -27,7 +27,7 @@ with zipfile.ZipFile(ex/'catalog/recipes.zip') as z:
   recipe=json.loads(data);assert recipe['final']==entry['final']
   # Recipes are sparse changes requiring a verified original, never full files.
   assert sum(len(bytes.fromhex(x[1])) for x in recipe['writes'])<recipe['size']
-for name in ['normal_lifecycle.py','diagnostics.py','discovery.py','movie_geometry.py','pythonw.exe','python312.dll','python312.zip']:
+for name in ['normal_lifecycle.py','diagnostics.py','discovery.py','movie_geometry.py','runtime_checkpoint.py','crash_evidence.py','pythonw.exe','python312.dll','python312.zip']:
  assert (ex/'payload/experience-runtime'/name).is_file()
 print('PASS manifest hashes, complete sparse option recipes, upstream Windows launcher, runtime completeness, game-asset exclusion')
 

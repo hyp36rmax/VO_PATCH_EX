@@ -46,7 +46,7 @@ class Diagnostics(unittest.TestCase):
             f.write(json.dumps({'event': 'error', 'utc': sensitive, 'fields': {'code': sensitive}})+'\n')
         target = d.export(self.root)
         with zipfile.ZipFile(target) as z:
-            self.assertEqual(set(z.namelist()), {'summary.json','events.json','configuration.json','module-logs.json'})
+            self.assertEqual(set(z.namelist()), {'summary.json','events.json','configuration.json','module-logs.json','runtime-state.json'})
             data = b'\n'.join(z.read(n) for n in z.namelist())
             for secret in (b'Alice', b'SERIAL', b'ghp_', b'777', b'Password'):
                 self.assertNotIn(secret, data)
