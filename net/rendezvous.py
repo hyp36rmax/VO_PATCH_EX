@@ -214,24 +214,46 @@ UNIT = 'vo-rendezvous'
 VERDICTS = ('punched', 'relayed', 'never joined')
 
 
+def oldest_entry():
+    """Timestamp of the oldest entry in the whole journal, or None."""
+    try:
+        p = subprocess.Popen(['journalctl', '-o', 'short-unix', '-q', '--no-pager'],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True)
+    except OSError:
+        return None
+    try:
+        for line in p.stdout:
+            head = line.split(None, 1)
+            if head:
+                try:
+                    return float(head[0])
+                except ValueError:
+                    continue
+        return None
+    finally:
+        p.kill()
+        p.wait()
+
+
 def tally(unit=UNIT, days=7):
     """Every code closed in the last `days`, as (verdict -> count) for the
-    last 24 h and for the whole window, plus how far back the journal
-    actually goes. One code, one line, written when the entry expires."""
+    last 24 h and for the whole window, and whether the unit logged anything
+    in that window. One code, one line, written when the entry expires."""
     try:
         out = subprocess.run(
             ['journalctl', '-u', unit, '--since', '%d days ago' % days,
              '-o', 'short-unix', '--no-pager'],
             capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as e:
-        return None, None, None, str(e)
+        return None, None, False, str(e)
     if out.returncode:
-        return None, None, None, (out.stderr.strip() or 'journalctl failed')
+        return None, None, False, (out.stderr.strip() or 'journalctl failed')
 
     now = time.time()
     day = dict.fromkeys(VERDICTS, 0)
     week = dict.fromkeys(VERDICTS, 0)
-    first = None
+    seen = False
     for line in out.stdout.splitlines():
         head = line.split(None, 1)
         if not head:
@@ -240,7 +262,7 @@ def tally(unit=UNIT, days=7):
             ts = float(head[0])
         except ValueError:
             continue
-        first = ts if first is None else min(first, ts)
+        seen = True
         if ' expired, ' not in line:
             continue
         verdict = line.split(' expired, ', 1)[1].strip()
@@ -248,11 +270,11 @@ def tally(unit=UNIT, days=7):
             week[verdict] += 1
             if now - ts <= 86400:
                 day[verdict] += 1
-    return day, week, first, None
+    return day, week, seen, None
 
 
 def status(unit=UNIT, days=7):
-    day, week, first, err = tally(unit, days)
+    day, week, seen, err = tally(unit, days)
     if err:
         print('cannot read the journal for %s: %s' % (unit, err))
         return 1
@@ -277,9 +299,12 @@ def status(unit=UNIT, days=7):
         row(v, (v,), share=True, indent=4)
     row('never joined', ('never joined',))
 
-    if first is None:
-        print('\nNothing in the journal for %s.' % unit)
-    else:
+    if not seen:
+        print('\nNo %s entries in the last %d days.' % (unit, days))
+    # Coverage is the age of the whole journal; the unit is quiet when idle,
+    # so its own oldest line says nothing about retention.
+    first = oldest_entry()
+    if first is not None:
         covered = (time.time() - first) / 86400.0
         if covered < days - 0.25:
             print('\nThe journal goes back %.1f days, so the right-hand column '
