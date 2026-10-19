@@ -53,7 +53,7 @@ typedef struct {long left,top,right,bottom;} RECT;
 #define D3DPT_TRIANGLESTRIP 1
 #define min(a,b) ((a)<(b)?(a):(b))
 static struct {int cs,width,height,bpp;HWND hwnd;struct {int run;}render;} g_ddraw;
-static struct {D3DPRESENT_PARAMETERS params;int tex_width,tex_height;void *device,*surface_tex[2],*vertex_buf;} g_d3d9;
+static struct {D3DPRESENT_PARAMETERS params;int tex_width,tex_height;void *device,*surface_tex[2],*vertex_buf;} g_d3d9 = {.device=(void*)1};
 static VoMonitor monitors[VO_MAX_MONITORS];static WCHAR config[MAX_PATH];static unsigned count;
 static struct {int movie_present,movie_visible,movie_wrong_pid,movie_wrong_parent,movie_wrong_owner,movie_wrong_class,movie_bad_bounds,movie_nochild,movie_duplicate,movie_hide_fail,movie_restore_fail,movie_capped;int window_visible[2];int clears;unsigned clear_color;int calls,fail_at,live,draws,presents,restores,streams,destroyed,foreground,enabled,closed;int minimized,p1_topmost,p1_above,position_calls[2],original_moves;HWND windows[2];void *bound,*texture[16];CUSTOMVERTEX vertices[16][4];} fake;
 static HRESULT api(void){return ++fake.calls==fake.fail_at?E_FAIL:0;}

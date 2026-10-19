@@ -24,8 +24,16 @@ static struct {
     VoPolicy last_phase;
     VoMovie movie;
     unsigned long movie_frames;
+    BOOL movie_quiet;
     unsigned long phase_pairs[4];
 } vo_dual;
+
+/* Launch projection is authoritative; Single owns no extra output resources. */
+static BOOL vo_dual_enabled(void)
+{
+    char enabled[2] = {0};
+    return GetEnvironmentVariableA("VO_DUAL_DISPLAY", enabled, sizeof enabled) == 1 && enabled[0] == '1';
+}
 
 static LRESULT CALLBACK vo_output_proc(HWND window, UINT msg, WPARAM w, LPARAM l)
 {
@@ -54,7 +62,9 @@ static void vo_dual_release_gpu(void)
 }
 static void vo_dual_before_reset(void)
 {
+    if (!vo_dual.attempted) return;
     EnterCriticalSection(&g_ddraw.cs);
+    vo_dual.movie_quiet = FALSE;
     if (vo_dual.attempted) vo_dual.disabled = TRUE;
     vo_dual_release_gpu();
     memset(vo_dual.texture_valid, 0, sizeof vo_dual.texture_valid);
@@ -70,6 +80,7 @@ static BOOL CALLBACK vo_p1_order(HWND window, LPARAM value)
 }
 static void vo_dual_visibility(BOOL show)
 {
+    if (!show) vo_dual.movie_quiet = FALSE;
     if (show && !vo_dual.movie.active && !vo_movie_restore(&vo_dual.movie, vo_dual.window[0])) {
         vo_dual.failure=E_FAIL;vo_dual.disabled=TRUE;show=FALSE;
     }
@@ -92,6 +103,7 @@ static void vo_dual_visibility(BOOL show)
 }
 static void vo_dual_pump(void)
 {
+    if (!vo_dual.attempted) return;
     MSG msg;
     /* Do not remove messages for the game's window or other libraries. */
     for (int i = 0; i < 2; ++i) if (vo_dual.window[i])
@@ -100,11 +112,14 @@ static void vo_dual_pump(void)
     EnterCriticalSection(&g_ddraw.cs);
     if (vo_dual.attempted && !vo_dual.disabled && vo_dual.window[0] && vo_dual.pairs) {
         BOOL eligible=vo_dual.last_phase==VO_PRIMARY_ONLY && vo_completed_policy()==VO_PRIMARY_ONLY;
+        HWND previous_movie = vo_dual.movie.active;
         BOOL may_show=vo_dual.visible && GetForegroundWindow()==g_ddraw.hwnd && !IsIconic(g_ddraw.hwnd);
         if(!vo_movie_update(&vo_dual.movie,g_ddraw.hwnd,vo_dual.window[0],monitors[vo_dual.output[0].monitor].desktop,eligible,may_show)) {
             vo_dual.failure=E_FAIL;vo_dual.disabled=TRUE;
         }
+        if (previous_movie != vo_dual.movie.active) vo_dual.movie_quiet = FALSE;
     }
+    if (!vo_dual.movie.active) vo_dual.movie_quiet = FALSE;
     if (vo_dual.disabled || GetForegroundWindow() != g_ddraw.hwnd || IsIconic(g_ddraw.hwnd))
         vo_dual_visibility(FALSE);
     LeaveCriticalSection(&g_ddraw.cs);
@@ -174,6 +189,7 @@ fail:
  * queue, CPU readback, or simulation. Sequential presents are not scanout sync. */
 static void vo_dual_present(int texture_index)
 {
+    if (!vo_dual.attempted && !vo_dual_enabled()) return;
     vo_dual_pump();
     EnterCriticalSection(&g_ddraw.cs);
     if (vo_dual.disabled || !vo_dual.texture_valid[texture_index]) goto done;
@@ -183,6 +199,15 @@ static void vo_dual_present(int texture_index)
     if (g_ddraw.width != 3840 || g_ddraw.height != 1080 || g_ddraw.bpp != 16) {
         vo_dual.disabled = TRUE; goto done;
     }
+    /* Never resume extra presentation with an incomplete resource set. Reset
+     * invalidates these references; ordinary initialization owns recreation. */
+    if (!g_d3d9.device || !g_d3d9.surface_tex[texture_index] || !vo_dual.state ||
+        !vo_dual.chain[0] || !vo_dual.chain[1] || !vo_dual.target[0] || !vo_dual.target[1]) {
+        vo_dual.failure = E_FAIL; vo_dual.disabled = TRUE; goto done;
+    }
+    /* Once P2 is black, the visible native AVI needs no secondary GPU work.
+     * Visibility observation changes only our outputs, never MCI or the AVI. */
+    if (vo_dual.movie.active && vo_dual.movie_quiet) goto done;
     IDirect3DSurface9 *original = NULL;
     HRESULT hr = IDirect3DDevice9_GetRenderTarget(g_d3d9.device, 0, &original);
     if (FAILED(hr)) { vo_dual.failure = hr; vo_dual.disabled = TRUE; goto done; }
@@ -240,7 +265,7 @@ restore:;
         }
     }
     if (FAILED(hr)) { vo_dual.failure=hr; vo_dual.disabled=TRUE; }
-    else { vo_dual.last_phase=vo_dual.policy[texture_index]; if(vo_dual.movie.active)++vo_dual.movie_frames;else ++vo_dual.pairs; ++vo_dual.phase_pairs[vo_dual.policy[texture_index]]; vo_dual_visibility(TRUE); }
+    else { vo_dual.movie_quiet = vo_dual.movie.active != NULL; vo_dual.last_phase=vo_dual.policy[texture_index]; if(vo_dual.movie.active)++vo_dual.movie_frames;else ++vo_dual.pairs; ++vo_dual.phase_pairs[vo_dual.policy[texture_index]]; vo_dual_visibility(TRUE); }
 #undef VO_TRY
 done:
     if (vo_dual.disabled) { vo_dual_visibility(FALSE); vo_dual_release_gpu(); }
@@ -248,6 +273,7 @@ done:
 }
 static void vo_dual_uploaded(int index)
 {
+    if (!vo_dual.attempted && !vo_dual_enabled()) return;
     vo_dual.policy[index] = (VoPolicy)vo_completed_policy();
     vo_dual.texture_valid[index] = TRUE;
     vo_dual.generation[index] = ++vo_dual.uploads;
