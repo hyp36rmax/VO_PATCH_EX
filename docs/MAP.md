@@ -38,12 +38,12 @@ is stale, so the line numbers are current.
 | 4437–5841 | generated site maps for the other three builds (`tools/buildsites.py`) | `# SITES JPRE BEGIN` |
 | 5842–17420 | the blobs, `BLOBS`, and `link()` | `BLOBS = {` |
 | 17421–18199 | banner and credit bitmaps, tile expansion | `LEVERS_CODE = link('LEVERS',` |
-| 18200–19246 | the patch table: `FEATURES`, `BY_KEY`, labels, tips, apply order | `FEATURES = [` |
-| 19247–20094 | ripping (`RAW = 2352`) and installing (`LOGICAL = 2048`) | `# --- ripping --------------` |
-| 20095–20943 | netplay setup, `SYNC_SITES`, cnc-ddraw, CD audio | `# --- netplay --------------` |
-| 20944–21468 | `Patcher`: reading a file, applying, restoring | `class Patcher:` |
-| 21469–22036 | the logo and icon (`tools/assets.py`), then the window strings | `# ASSETS BLOB BEGIN - tools/` |
-| 22037–24068 | the window (`run_tk`), the CLI, `main` | `def run_tk():` |
+| 18200–19247 | the patch table: `FEATURES`, `BY_KEY`, labels, tips, apply order | `FEATURES = [` |
+| 19248–20095 | ripping (`RAW = 2352`) and installing (`LOGICAL = 2048`) | `# --- ripping --------------` |
+| 20096–20944 | netplay setup, `SYNC_SITES`, cnc-ddraw, CD audio | `# --- netplay --------------` |
+| 20945–21469 | `Patcher`: reading a file, applying, restoring | `class Patcher:` |
+| 21470–22037 | the logo and icon (`tools/assets.py`), then the window strings | `# ASSETS BLOB BEGIN - tools/` |
+| 22038–24069 | the window (`run_tk`), the CLI, `main` | `def run_tk():` |
 <!-- REGIONS END -->
 
 ## 3. `v_on.exe`
