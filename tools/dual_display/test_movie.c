@@ -15,6 +15,10 @@ static void movie(void){fake.movie_present=1;fake.movie_visible=1;vo_dual_pump()
 int main(void){
  setup();movie();int calls=fake.position_calls[0];vo_dual_visibility(TRUE);assert(fake.position_calls[0]==calls&&!fake.window_visible[0]);
  int draws=fake.draws,presents=fake.presents;vo_dual_present(0);assert(fake.draws==draws&&fake.presents==presents+1&&vo_dual.movie_frames==1);assert(fake.foreground==1&&!fake.original_moves);
+ /* A visible AVI keeps P2 black without repeated graphics work. */
+ int gpu_calls=fake.calls; presents=fake.presents;
+ for(int frame=0;frame<20;frame++){vo_dual_uploaded(0);vo_dual_present(0);}
+ assert(fake.calls==gpu_calls&&fake.presents==presents&&!fake.original_moves);
  /* Skip, natural completion and unexpected destruction share the observed end. */
  fake.movie_present=0;vo_dual_pump();assert(!vo_dual.movie.active&&fake.window_visible[0]&&fake.p1_above);vo_dual_end();assert(!fake.live&&fake.destroyed==2);
  setup();movie();fake.movie_visible=0;vo_dual_pump();assert(fake.window_visible[0]&&!vo_dual.movie.active);vo_dual_end();
@@ -34,5 +38,14 @@ int main(void){
  setup();for(unsigned i=0;i<100;i++){movie();fake.movie_present=0;vo_dual_pump();}assert(vo_dual.movie.used==64&&vo_dual.movie.total>64);vo_dual_end();
  /* With the dual environment disabled, no output or movie action occurs. */
  setup();vo_dual_end();memset(&vo_dual,0,sizeof vo_dual);fake.enabled=0;fake.movie_present=fake.movie_visible=1;calls=fake.position_calls[0];vo_dual_uploaded(0);vo_dual_present(0);vo_dual_pump();assert(!vo_dual.attempted&&!vo_dual.movie.active&&fake.position_calls[0]==calls);
+ assert(!vo_dual.uploads&&!vo_dual.texture_valid[0]);
+ /* Readiness failure must stop before any render-target operation. */
+ fake.enabled=1;
+ setup();void *device=g_d3d9.device;g_d3d9.device=NULL;calls=fake.calls;
+ vo_dual_present(0);assert(vo_dual.disabled&&fake.calls==calls&&!fake.live);
+ g_d3d9.device=device;vo_dual_end();
+ setup();void *texture=g_d3d9.surface_tex[0];g_d3d9.surface_tex[0]=NULL;calls=fake.calls;
+ vo_dual_present(0);assert(vo_dual.disabled&&fake.calls==calls&&!fake.live);
+ g_d3d9.surface_tex[0]=texture;vo_dual_end();
  puts("PASS movie identity, bounds, ambiguity/limit rejection, hide/restore, lifecycle end, absent/destruction, focus-deferred restoration, visibility failures, single-mode gate, P2 black and gameplay resumption; host API doubles only");
 }
