@@ -34,9 +34,21 @@ for source in map(Path,sys.argv[2:]):
    assert not (root/'experience-runtime/normal_lifecycle.py').exists()
    if wanted.get('bossunlock') and wanted.get('bosses'):assert (root/'bosses.bin').read_bytes()==(2).to_bytes(4,'little')
    p.restore();assert p.load(str(root/'v_on.exe'))[1]
+  # All upstream save states survive ordinary repatching and Restore;
+  # pre-unlock promotes either independent unlock to both.
+  for level in range(4):
+   saved=level.to_bytes(4,'little');(root/'bosses.bin').write_bytes(saved)
+   ok,log=p.apply(dict(v.default_state(),bosses=True));assert ok,log
+   assert (root/'bosses.bin').read_bytes()==saved
+   p.restore();assert (root/'bosses.bin').read_bytes()==saved
+   assert p.load(str(root/'v_on.exe'))[1]
+   ok,log=p.apply(dict(v.default_state(),bosses=True,bossunlock=True));assert ok,log
+   assert (root/'bosses.bin').read_bytes()==(2).to_bytes(4,'little')
+   p.restore();assert (root/'bosses.bin').read_bytes()==(2).to_bytes(4,'little')
+   assert p.load(str(root/'v_on.exe'))[1]
   # Roll back pre-unlock creation and replacement after a later failure.
   real=adapter.atomic
-  for prior in (None, (1).to_bytes(4,'little')):
+  for prior in (None, *((n).to_bytes(4,'little') for n in range(4))):
    if prior is None:(root/'bosses.bin').unlink(missing_ok=True)
    else:(root/'bosses.bin').write_bytes(prior)
    before=snapshot(root);failed=[False]

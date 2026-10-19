@@ -6,8 +6,8 @@ import types
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import selftest
 ROOT = Path(__file__).resolve().parents[2]
-PIN = '4ecae6237e1fc432c0be2f2b0aeab5303120e444'
-BASE = '6b22b0dcd490eec8b6a3e953d881649e74ab26cb'
+PIN = '2c36b5ebe2bc879bc9c87baaaabf7aed4adfa4a0'
+BASE = '4a6ef2e3e3bc4354a4b75e00b86e677bf61fa83b'
 def load(ref):
     source = subprocess.check_output(['git', 'show', ref + ':v-on-patcher.py'], cwd=ROOT)
     m = types.ModuleType('reference'); m.__file__ = str(ROOT/'v-on-patcher.py')

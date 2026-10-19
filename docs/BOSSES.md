@@ -13,8 +13,10 @@ patch does, then how.
 
 - **Jaguarandi** - beat Jaguarandi on **Very Hard** without losing a match
   earlier in the run.
-- **Z-Gradt** - with Jaguarandi already unlocked, finish the game on Very
-  Hard with any machine, without losing a match.
+- **Z-Gradt** - finish the game with any machine on Very Hard without
+  losing a match.
+
+The two are earned apart.
 
 A continue counts as a lost match. Changing the difficulty spoils the run.
 Only a new game from the title starts a clean one.
@@ -24,13 +26,18 @@ black screen. YOU UNLOCKED and its name stand on the right in the select's
 lettering, and the title jingle plays. PRESS BUTTON TO CONTINUE flashes at
 the bottom after five seconds. Only a fresh press moves on; a button held
 from the fight does not skip it. The press is answered with the select's
-cursor sound, and the boss leaves the screen with it.
+cursor sound, and the boss leaves the screen with it. The buttons are the
+report's own (Start and the two triggers) and the ones that skip the
+credits: A and Space, Select and the camera key. The twin-stick profile's
+triggers do not reach the screen, since outside a round the pad tick does
+not read them; its A does.
 
 Jaguarandi's screen comes straight after it falls, before the Player Data
 Report. Z-Gradt's comes after the credits, before the initials. The game
 then carries on as it would have.
 
-Unlocks are kept in `bosses.bin` beside the game. They survive restarts and
+Unlocks are kept in `bosses.bin` beside the game, a dword: 0 none, 1
+Jaguarandi, 2 both, 3 Z-Gradt alone. They survive restarts and
 re-patching. **Pre-unlock the bosses** writes the file with both unlocked.
 It never takes progress away. **Restore original** leaves the file alone,
 since the unpatched game never reads it.
@@ -39,6 +46,8 @@ since the unpatched game never reads it.
 
 - An unlocked boss stands in the row after Raiden: Jaguarandi first, then
   Z-Gradt raised on the hangar's lip. A locked boss is not there at all.
+  With Z-Gradt alone, Jaguarandi's bay between stands empty and the
+  cursor steps over it, the walk taking both gaps in one.
 - Each boss has a portrait of its own in the row along the bottom, after
   Raiden's. The portraits are pixel art drawn after SEGA's renders of the
   two machines, Z-Gradt's mirrored, in the eight's style: framed and
@@ -113,8 +122,8 @@ since the unpatched game never reads it.
   Not while its super laser is out.
 - Z-Gradt moves on the arena it is on. It stops at the arena's edge and at
   the walls and obstacles the eight stop at, and its height follows the
-  ground. On the moon gate it keeps the game's own bounds, a square 280
-  units each way from the middle.
+  ground. On the last stage it keeps the game's own bounds, a square 280
+  units each way from the middle. The CPU's Z-Gradt keeps them everywhere.
 - Z-Gradt's laser turns the right Z-Gradt gold when both are on the field.
   A Z-Gradt that falls darkens alone; the player's keeps the colours it
   was given.
@@ -168,7 +177,7 @@ when the box is ticked, so unticked it leaves the executable as the other
 patches alone would. The blob's buffers are gathered at its end: the
 bosses' motions, the model and AI copies, the replay's ring, the saved
 palettes and the rest, 263,217 bytes. The file carries the blob only as
-far as its last byte that is not zero, 16,583 bytes. The rest is the
+far as its last byte that is not zero, 16,871 bytes. The rest is the
 section's virtual size, which Windows zeroes at load (`OWN_SECTIONS`).
 
 ### The select's row
@@ -183,9 +192,10 @@ to Z-Gradt, which also rises onto the lip (`selstep_*`).
 The bosses' models are their fight models posed by the select's motions.
 Jaguarandi is posed through Raiden's, with its head put back on. Z-Gradt
 stands in its stance's first frame. Each file is read once into a block
-of its own (`sel_loadrb`). The game's model slot points there only while
-the boss is drawn (`sel_slotsin`, `sel_slotsout`), and the game's own
-pointer is kept and put back. The files are not appended to the game's
+of its own (`sel_loadrb`); a file that is missing or short is not
+installed, and its block is freed. The game's model slot points there
+only while the boss is drawn (`sel_slotsin`, `sel_slotsout`), and the
+game's own pointer is kept and put back. The files are not appended to the game's
 8 MB model pool, because after a full game that runs into the C runtime's
 heap. The game's own copy of the file, present on a continue's select, is
 never drawn here. `selcol` turns the colour words of the polygons it
@@ -289,9 +299,11 @@ texture bank the fights had loaded is reloaded.
   jump turns the facing to the CPU at the CPU's own aim (`zlock`), and
   Z-Gradt's own code turns its model with it.
 - **Z-Gradt's floor** - its moves ask `zfloor_a` where the ground is at
-  the place they go. On the moon gate that is the game's own box
-  (`BS_ZBOXA`); elsewhere it is the arena's floor as the eight read it
-  (`BS_FLOORA`). A wall comes back as the query gives it. A rise over 4
+  the place they go. For the CPU's Z-Gradt, and the player's on the last
+  stage, that is the game's own box (`BS_ZBOXA`); elsewhere it is the
+  arena's floor as the eight read it (`BS_FLOORA`). The test is the stage
+  number, not the arena id: the last stage's field is id 8, and id 6 is
+  MOON BASE, a regular stage. A wall comes back as the query gives it. A rise over 4
   units above the floor under it comes back as a wall facing the way it
   moves. A smaller rise comes back as its height now plus the rise, so
   it never sticks on a floor it landed below.
@@ -361,7 +373,7 @@ texture bank the fights had loaded is reloaded.
 ## Testing it
 
 - `bosses.bin` beside the game: delete it to start locked, or write the
-  dword 1 or 2 to start part or fully unlocked.
+  dword 1 (Jaguarandi), 3 (Z-Gradt) or 2 (both).
 - `python3 tools/selftest.py v_on.exe` checks every site and 437
   combinations of patches, including the two boss boxes with and without
   each other. `python3 tools/portraittest.py` on the game folder reads

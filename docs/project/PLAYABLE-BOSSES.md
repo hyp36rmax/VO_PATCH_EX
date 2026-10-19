@@ -1,8 +1,8 @@
 # Playable Bosses in Experience
 
 This isolated development branch integrates upstream single-player Playable
-Bosses from `4ecae6237e1fc432c0be2f2b0aeab5303120e444`, based on Experience
-`6b22b0dcd490eec8b6a3e953d881649e74ab26cb`. Pairomaniac maintains the original
+Bosses from `2c36b5ebe2bc879bc9c87baaaabf7aed4adfa4a0`, based on Experience
+`55bcb76425144d3e138b19e89e4f15887a218f68`. Pairomaniac maintains the original
 V-On Patcher; Vortyne implemented Playable Bosses; hyp36rmax maintains the
 VO PATCH EX integration and expansions. The [upstream technical record](../BOSSES.md)
 retains the implementation details and portrait licensing boundaries.
@@ -57,4 +57,24 @@ machines with bosses disabled. Boss-specific input tests should include each
 lever's dash/turbo, press/hold/release and mixed controller ownership.
 
 Do not infer acceptance of later gameplay or every monitor combination from
-successful patch generation. No public release or Experience merge is part of B01.
+successful patch generation. No public release or Experience merge is part of B02.
+
+## Updated upstream baseline
+
+The B02 source preserves the accepted I01 movie ownership boundaries. Relative
+to B01, upstream now frees failed/short model loads, retains Z-Gradt’s native
+floor query for CPU play and the final stage, accepts the existing menu input
+on the unlock report, and handles independently unlocked boss selection bays.
+Portrait visibility and selection-camera traversal follow that independent state.
+There is no weapon, damage or animation rebalance.
+
+`bosses.bin` retains values 0 (neither), 1 (Jaguarandi), and 2 (both), adding
+3 (Z-Gradt only). Jaguarandi is earned by defeating it during a clean Very Hard
+run; Z-Gradt by finishing a clean Very Hard run with any machine. Neither now
+requires the other. Source/table validation covers all four original executable
+variants; the integrated Display catalog remains Retail/JPRE only.
+
+Windows acceptance starts on RAZER in Single Display with intro, bosses and
+pre-unlock enabled: natural completion, attract, both boss selections and play,
+standard play and clean exit. Repeat on SIM Single, then Dual Mirror and Versus.
+Those configurations remain NEEDS VALIDATION until physically exercised.
