@@ -24,7 +24,11 @@ black screen. YOU UNLOCKED and its name stand on the right in the select's
 lettering, and the title jingle plays. PRESS BUTTON TO CONTINUE flashes at
 the bottom after five seconds. Only a fresh press moves on; a button held
 from the fight does not skip it. The press is answered with the select's
-cursor sound, and the boss leaves the screen with it.
+cursor sound, and the boss leaves the screen with it. The buttons are the
+report's own (Start and the two triggers) and the ones that skip the
+credits: A and Space, Select and the camera key. The twin-stick profile's
+triggers do not reach the screen, since outside a round the pad tick does
+not read them; its A does.
 
 Jaguarandi's screen comes straight after it falls, before the Player Data
 Report. Z-Gradt's comes after the credits, before the initials. The game
@@ -167,8 +171,8 @@ The blob has a section of its own, `.vobs`. The patcher appends it only
 when the box is ticked, so unticked it leaves the executable as the other
 patches alone would. The blob's buffers are gathered at its end: the
 bosses' motions, the model and AI copies, the replay's ring, the saved
-palettes and the rest, 263,213 bytes. The file carries the blob only as
-far as its last byte that is not zero, 16,619 bytes. The rest is the
+palettes and the rest, 263,221 bytes. The file carries the blob only as
+far as its last byte that is not zero, 16,643 bytes. The rest is the
 section's virtual size, which Windows zeroes at load (`OWN_SECTIONS`).
 
 ### The select's row

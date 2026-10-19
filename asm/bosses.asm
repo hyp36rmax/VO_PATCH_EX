@@ -181,6 +181,9 @@ extern BS_ZDRAWA                ; Z-Gradt's draw, without its moves
 extern BS_FXA                   ; the effects tables: 24 of 0x24, 24 of 0x38
 extern BS_FX2A
 extern SEMUTE                   ; nonzero: no sound effects
+extern ACCEPT1                  ; 1P's key buffer slot for A and Space,
+extern CAMERA1                  ; and for Select and the camera key: 0x80
+                                ; while held
 extern BS_NAMEA                 ; its machine names, 15 bytes each
 
 ; The round's animation loads
@@ -2577,7 +2580,15 @@ UNL_NZ      equ 0x1a * 3            ; and Z-Gradt's
 UNL_TILE    equ 0x80                ; a tile's bytes
 ST_SELECT   equ 4                   ; A's state on the select
 UNL_BUTTONS equ 0x10110             ; the buttons that end the report, as
-                                    ; held (BS_PADEDGE is held, not pressed)
+                                    ; held (BS_PADEDGE is held, not pressed):
+                                    ; Start and the two triggers, read out
+                                    ; of the lever words. Outside a round
+                                    ; the pad tick drops bind slots past 7,
+                                    ; and the twin-stick profile's triggers
+                                    ; are slots 8 and 9, so
+UNL_KEY     equ 0x80                ; the key slots count too: A and Space,
+                                    ; Select and the camera key, as the
+                                    ; credits skip reads them
 ST_REPORT   equ 0x1c                ; A's states: the report's start,
 ST_INITIALS equ 0x16                ; the initials, the last fight won,
 ST_ZWON     equ 0x1f                ; and the rounds
@@ -3073,8 +3084,8 @@ unl_logic:
         push    UNL_TITLE
         call    BS_SFX
         add     esp, 4
-        mov     dword [unl_prev], UNL_BUTTONS ; one held from before: not
-        mov     byte [unl_go], 0    ; a press
+        mov     dword [unl_prev], UNL_BUTTONS | UNL_KEY ; one held from
+        mov     byte [unl_go], 0    ; before: not a press
         call    unl_palsave         ; what the palettes held, kept, and
         mov     ebx, [unl_on]       ; the boss's in, both sides'
         shl     ebx, 2
@@ -3173,7 +3184,11 @@ unl_logic:
 .button:                            ; a press made since, then let go:
         mov     eax, [BS_PADEDGE]   ; the buttons are held ones, and the
         and     eax, UNL_BUTTONS    ; report after skips itself while one
-        cmp     byte [unl_go], 0    ; is down
+        mov     cl, [ACCEPT1]       ; is down
+        or      cl, [CAMERA1]
+        and     ecx, UNL_KEY
+        or      eax, ecx
+        cmp     byte [unl_go], 0
         jne     .release
         mov     ecx, [unl_prev]
         mov     [unl_prev], eax
