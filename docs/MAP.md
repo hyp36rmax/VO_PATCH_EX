@@ -36,14 +36,14 @@ is stale, so the line numbers are current.
 | 2784–2880 | disc images table, `Build` class, annex order | `DISC_IMAGES = {` |
 | 2881–4436 | the four builds: symbols, caves, site maps | `RETAIL = Build('English reta` |
 | 4437–5829 | generated site maps for the other three builds (`tools/buildsites.py`) | `# SITES JPRE BEGIN` |
-| 5830–17375 | the blobs, `BLOBS`, and `link()` | `BLOBS = {` |
-| 17376–18154 | banner and credit bitmaps, tile expansion | `LEVERS_CODE = link('LEVERS',` |
-| 18155–19194 | the patch table: `FEATURES`, `BY_KEY`, labels, tips, apply order | `FEATURES = [` |
-| 19195–20042 | ripping (`RAW = 2352`) and installing (`LOGICAL = 2048`) | `# --- ripping --------------` |
-| 20043–20891 | netplay setup, `SYNC_SITES`, cnc-ddraw, CD audio | `# --- netplay --------------` |
-| 20892–21416 | `Patcher`: reading a file, applying, restoring | `class Patcher:` |
-| 21417–21984 | the logo and icon (`tools/assets.py`), then the window strings | `# ASSETS BLOB BEGIN - tools/` |
-| 21985–24016 | the window (`run_tk`), the CLI, `main` | `def run_tk():` |
+| 5830–17377 | the blobs, `BLOBS`, and `link()` | `BLOBS = {` |
+| 17378–18156 | banner and credit bitmaps, tile expansion | `LEVERS_CODE = link('LEVERS',` |
+| 18157–19197 | the patch table: `FEATURES`, `BY_KEY`, labels, tips, apply order | `FEATURES = [` |
+| 19198–20045 | ripping (`RAW = 2352`) and installing (`LOGICAL = 2048`) | `# --- ripping --------------` |
+| 20046–20894 | netplay setup, `SYNC_SITES`, cnc-ddraw, CD audio | `# --- netplay --------------` |
+| 20895–21419 | `Patcher`: reading a file, applying, restoring | `class Patcher:` |
+| 21420–21987 | the logo and icon (`tools/assets.py`), then the window strings | `# ASSETS BLOB BEGIN - tools/` |
+| 21988–24019 | the window (`run_tk`), the CLI, `main` | `def run_tk():` |
 <!-- REGIONS END -->
 
 ## 3. `v_on.exe`
@@ -140,7 +140,7 @@ first is there on every run, the other four only with their patch.
 | Section | VA | Size | Appended by | Holds |
 | --- | --- | --- | --- | --- |
 | `.vojp` | `0x36b5000` | `0x1400` | every run | the annex: every blob but the three below, in `ANNEX_BLOBS` order |
-| `.vobs` | `0x36b7000` | `0x44508` | Playable bosses | `bosses.asm`, its code and tables, then its buffers (virtual, not on disk) |
+| `.vobs` | `0x36b7000` | `0x44518` | Playable bosses | `bosses.asm`, its code and tables, then its buffers (virtual, not on disk) |
 | `.voxt` | `0x36fc000` | `0x40c` | Disable menu bar | the F11 dialog template, then `voxt.asm` |
 | `.vocd` | `0x36fd000` | `0xbac` | No disc required | `vocd.asm` and its track table |
 | `.vohr` | `0x36fe000` | `0x4f0830` | Native widescreen | `UI_CODE`, the mask spans, the row table, the polygon pool, then the off-screen canvas (virtual, not on disk) |

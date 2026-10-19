@@ -113,8 +113,8 @@ since the unpatched game never reads it.
   Not while its super laser is out.
 - Z-Gradt moves on the arena it is on. It stops at the arena's edge and at
   the walls and obstacles the eight stop at, and its height follows the
-  ground. On the moon gate it keeps the game's own bounds, a square 280
-  units each way from the middle.
+  ground. On the last stage it keeps the game's own bounds, a square 280
+  units each way from the middle. The CPU's Z-Gradt keeps them everywhere.
 - Z-Gradt's laser turns the right Z-Gradt gold when both are on the field.
   A Z-Gradt that falls darkens alone; the player's keeps the colours it
   was given.
@@ -167,8 +167,8 @@ The blob has a section of its own, `.vobs`. The patcher appends it only
 when the box is ticked, so unticked it leaves the executable as the other
 patches alone would. The blob's buffers are gathered at its end: the
 bosses' motions, the model and AI copies, the replay's ring, the saved
-palettes and the rest, 263,217 bytes. The file carries the blob only as
-far as its last byte that is not zero, 16,583 bytes. The rest is the
+palettes and the rest, 263,213 bytes. The file carries the blob only as
+far as its last byte that is not zero, 16,619 bytes. The rest is the
 section's virtual size, which Windows zeroes at load (`OWN_SECTIONS`).
 
 ### The select's row
@@ -290,9 +290,11 @@ texture bank the fights had loaded is reloaded.
   jump turns the facing to the CPU at the CPU's own aim (`zlock`), and
   Z-Gradt's own code turns its model with it.
 - **Z-Gradt's floor** - its moves ask `zfloor_a` where the ground is at
-  the place they go. On the moon gate that is the game's own box
-  (`BS_ZBOXA`); elsewhere it is the arena's floor as the eight read it
-  (`BS_FLOORA`). A wall comes back as the query gives it. A rise over 4
+  the place they go. For the CPU's Z-Gradt, and the player's on the last
+  stage, that is the game's own box (`BS_ZBOXA`); elsewhere it is the
+  arena's floor as the eight read it (`BS_FLOORA`). The test is the stage
+  number, not the arena id: the last stage's field is id 8, and id 6 is
+  MOON BASE, a regular stage. A wall comes back as the query gives it. A rise over 4
   units above the floor under it comes back as a wall facing the way it
   moves. A smaller rise comes back as its height now plus the rise, so
   it never sticks on a floor it landed below.

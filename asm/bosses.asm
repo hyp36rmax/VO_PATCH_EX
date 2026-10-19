@@ -296,7 +296,6 @@ SELECT_HI   equ 0x30
 ATTRACT_LO  equ 0x10                ; scene: title and attract, the demo
 ATTRACT_HI  equ 0x20                ; included
 LAST_STAGE  equ 9
-ARENA_MOON  equ 6                   ; the moon gate, the last stage's arena
 READY_GO    equ 5                   ; frames after GET READY before the
                                     ; player's Z-Gradt moves
 MODEL_COPY  equ 0x800
@@ -3978,18 +3977,23 @@ zfire_a:
 .done:  ret
 
 ; Z-Gradt's moves ask its own floor query where the ground is at the place
-; it moves to: a box 280 each way from the arena's middle, the moon gate's
-; size, flat inside, a wall of 100000 outside with the wall's facing. On
-; every other arena the player's Z-Gradt asks the arena's own floor
-; instead, the query the eight walk by (BS_FLOORA): a wall where it says
-; one is, its facing as it writes it; otherwise the floor there against
-; the floor under it now, a rise over zfl_step a wall facing the way it
-; moves, a smaller one taken, its height following the ground. In place
-; of the three calls to its own query; cdecl, (the object, x, z, the
-; facing's word), the height in st0.
+; it moves to: a box 280 each way from the arena's middle, the last
+; stage's size, flat inside, a wall of 100000 outside with the wall's
+; facing. The CPU's Z-Gradt keeps that query, as does the player's on the
+; last stage (the stage, not the arena: the last stage's field is id 8,
+; fld_bosn; id 6 is MOON BASE's). On every other stage the player's
+; Z-Gradt asks the arena's own floor instead, the query the eight walk by
+; (BS_FLOORA): a wall where it says one is, its facing as it writes it;
+; otherwise the floor there against the floor under it now, a rise over
+; zfl_step a wall facing the way it moves, a smaller one taken, its height
+; following the ground. In place of the three calls to its own query;
+; cdecl, (the object, x, z, the facing's word), the height in st0.
 zfloor_a:
-        cmp     dword [BS_ARENA], ARENA_MOON
-        je      BS_ZBOXA            ; its own box there, the args as they are
+        mov     eax, [esp + 4]
+        cmp     eax, BS_OBJA
+        jne     BS_ZBOXA            ; the CPU's: its own box, the args as
+        cmp     dword [BS_STAGEA], LAST_STAGE ; they are; the player's too
+        je      BS_ZBOXA            ; on the last stage
         push    ebp
         mov     ebp, esp
         sub     esp, 12             ; the floor there, the floor here, a facing
@@ -5033,7 +5037,8 @@ zl_ang: dd      0                   ; the way to it
 zf_start: dd    100, 199, 100, 60, 100, 199, 100, 100, 100, 199 ; the
                                     ; player's Z-Gradt's fly-in, by arena:
                                     ; Air, Fact, Water, Fore, Inka, Dock,
-                                    ; Moon, Tro, Fld, Core
+                                    ; Moon, Tro, Nirvana (bosn, the last
+                                    ; stage), Secret Base (bosw)
 zfl_wall: dd    1000.0              ; the arena's floor at a wall, and over
 zfl_step: dd    4.0                 ; the rise Z-Gradt's moves take, its own
 win_z:  dd      4.0                 ; win and lose: the subject's distance
