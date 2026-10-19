@@ -13,10 +13,10 @@ patch does, then how.
 
 - **Jaguarandi** - beat Jaguarandi on **Very Hard** without losing a match
   earlier in the run.
-- **Z-Gradt** - finish the game on Very Hard with any machine, without
-  losing a match, whether or not Jaguarandi came up on the way.
+- **Z-Gradt** - finish the game with any machine on Very Hard without
+  losing a match.
 
-The two are earned apart, in either order.
+The two are earned apart.
 
 A continue counts as a lost match. Changing the difficulty spoils the run.
 Only a new game from the title starts a clean one.

@@ -300,8 +300,8 @@ two-player and internet play keep the select to the eight.
 
 - **Jaguarandi** - beat it on Very Hard without losing a match earlier in
   the run.
-- **Z-Gradt** - finish the game on Very Hard without losing a match,
-  whether or not Jaguarandi came up on the way.
+- **Z-Gradt** - finish the game with any machine on Very Hard without
+  losing a match.
 
 A continue counts as a lost match. Each unlock gets a screen of its own.
 Both are saved in `bosses.bin` next to the game, which survives restarts,
@@ -315,9 +315,8 @@ re-patching and **Restore original**.
 ### What changes
 
 - **Machine select** - an unlocked boss stands in the row after Raiden
-  with its own portrait. The row moves left to make room, and the countdown
-  runs 20 seconds longer. The Quick VR Select and Machine Color Select work
-  on them too.
+  with its own portrait, and the countdown gives 20 seconds more to reach
+  it. The Quick VR Select and Machine Color Select work on them too.
 - **In a match** - each boss fights with its own weapons. The HUD names
   Jaguarandi's as the Sega Ages release does. Z-Gradt fires its super
   laser with Dash and has a fourth gauge for it under the other three.

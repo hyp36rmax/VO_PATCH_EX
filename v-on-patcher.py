@@ -18727,12 +18727,12 @@ FEATURES = [
      '\n'
      'Unlock\tBeat Jaguarandi on Very Hard without losing a match\n'
      '\tin the run, and it joins the select. Finish the game\n'
-     '\tthe same way, Jaguarandi or not, for Z-Gradt. Each is\n'
+     '\twith any machine the same way for Z-Gradt. Each is\n'
      '\tannounced on a screen of its own. Kept in bosses.bin\n'
      '\tbeside the game.\n'
-     'Select\tAn unlocked boss stands in the row after Raiden, the\n'
-     '\trow moving left to make room, and the countdown runs\n'
-     '\t20 seconds longer.\n'
+     'Select\tAn unlocked boss stands in the row after Raiden with\n'
+     '\tits own portrait, and the countdown gives 20 seconds\n'
+     '\tmore to reach it.\n'
      'Colour\tWith Machine Color Select on, up and down on a boss\n'
      '\tgive it any of the colours the eight have.', [
          # The select: the bosses' palettes and Z-Gradt's lift, from the
@@ -19031,8 +19031,8 @@ FEATURES = [
      '\n'
      'Earning\tWithout this, Jaguarandi is unlocked by beating it on\n'
      '\tVery Hard without losing a match in the run, and\n'
-     '\tZ-Gradt by finishing the game the same way, in either\n'
-     '\torder.\n'
+     '\tZ-Gradt by finishing the game with any machine the\n'
+     '\tsame way.\n'
      'File\tbosses.bin beside the game, which keeps the unlocks.\n'
      '\tProgress already made is never taken back.', []),
 ]
