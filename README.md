@@ -708,6 +708,9 @@ python3 v-on-patcher.py --selfcheck        # validate the patch tables
   bottom left corner. Cosmetic only.
   - One player, after a continue on a space stage: a slice of stars.
   - Two players, 2P's full machine select: black.
+- **Playable bosses** - the CPU's Z-Gradt may get stuck at the arena's
+  edge, and its movement and attacks can differ from the unpatched game.
+  Under investigation.
 
 ## Working on the patcher
 
