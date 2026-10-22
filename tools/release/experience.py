@@ -15,11 +15,17 @@ REPO = 'hyp36rmax/VO_PATCH_EX'
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'experience'))
 from release_version import VERSION
 
-VALIDATED_BASELINE = '55bcb76425144d3e138b19e89e4f15887a218f68'
+VALIDATED_BASELINE = 'b6518d3f3c0777335fbb2100c1b99e8304797d2b'
+# Frozen B02 implementation; only release maintenance and presentation may differ.
 RELEASE_CHANGES = {
-    '.github/workflows/build.yml', 'tools/experience/release_version.py',
-    'tools/experience/package_normal.py', 'docs/releases/v0.18.0.md',
+    '.github/workflows/build.yml', '.github/workflows/experience-version.yml',
+    '.github/release-authorizations/v0.18.0.json',
+    'tools/experience/release_version.py', 'tools/experience/package_normal.py',
+    'README.md', 'docs/releases/v0.18.0.md', 'docs/releases/v0.18.1.md',
+    'tools/release/README.md', 'tools/release/experience.py',
+    'tools/release/test_experience.py',
 }
+
 RECORD = Path('.github/release-authorizations') / (VERSION + '.json')
 WORKFLOW = '.github/workflows/publish-experience.yml'
 ALLOWED_CHANGES = {

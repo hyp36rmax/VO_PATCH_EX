@@ -1,7 +1,7 @@
 """Experience product version, independent of upstream patch and launcher versions."""
 import re
 
-VERSION = 'v0.18.0'
+VERSION = 'v0.18.1'
 
 
 def validate_release_tag(tag):
