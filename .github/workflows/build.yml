@@ -50,6 +50,7 @@ jobs:
         run: |
           python tools/brandingtest.py
           python tools/experience/test_bosses.py
+          python tools/bosses/test_local_vs_boundary.py
           python tools/experience/test_repository.py
           python tools/experience/test_diagnostics.py
           python tools/experience/test_normal_lifecycle.py
