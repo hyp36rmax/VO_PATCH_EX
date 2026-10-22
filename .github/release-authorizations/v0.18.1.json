@@ -1,0 +1,23 @@
+{
+  "schema": 2,
+  "repository": "hyp36rmax/VO_PATCH_EX",
+  "version": "v0.18.1",
+  "title": "VO PATCH EX v0.18.1 \u2014 Playable Bosses",
+  "prerelease": true,
+  "application_commit": "291be664d0e9607ac01256086b5fed9147f9a4e2",
+  "artifact_name": "VO-PATCH-EX-v0.18.1-Windows.zip",
+  "artifact_sha256": "7556d4d67d0c0ff2ec03fbfb419852fda45037229bbaf5da1d50a5180de7f329",
+  "artifact_size": 112234193,
+  "ci_run_id": 39706186926,
+  "ci_run_attempt": 1,
+  "ci_artifact_id": 12395790307,
+  "ci_artifact_name": "v-on-patcher-291be66",
+  "notes_sha256": "a66691f5cd7b5ade24aca8cc86fc7054644e82494105aa490e825b7b1d185e1b",
+  "windows_acceptance": {
+    "status": "PRESERVED_IMPLEMENTATION",
+    "confirmed_by": "hyp36rmax",
+    "baseline_commit": "b6518d3f3c0777335fbb2100c1b99e8304797d2b",
+    "exact_artifact_physical_test": "NOT_RUN",
+    "record": "R0181 authorizes frozen Windows-validated B02 single-player Playable Bosses and reuse of acceptance for unchanged implementation paths. Runtime source and catalog remain unchanged from B02; release-only maintenance is allowlisted. Hosted Windows execution, final package integrity and Retail/JPRE Apply/Restore passed. This is not a fresh physical test of the exact ZIP or a claim that every RAZER/SIM display configuration was tested."
+  }
+}
