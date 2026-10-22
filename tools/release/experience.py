@@ -12,11 +12,18 @@ import urllib.request
 import zipfile
 
 REPO = 'hyp36rmax/VO_PATCH_EX'
-VERSION = 'v0.18.0-experience.1'
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'experience'))
+from release_version import VERSION
+
+VALIDATED_BASELINE = '55bcb76425144d3e138b19e89e4f15887a218f68'
+RELEASE_CHANGES = {
+    '.github/workflows/build.yml', 'tools/experience/release_version.py',
+    'tools/experience/package_normal.py', 'docs/releases/v0.18.0.md',
+}
 RECORD = Path('.github/release-authorizations') / (VERSION + '.json')
 WORKFLOW = '.github/workflows/publish-experience.yml'
 ALLOWED_CHANGES = {
-    str(RECORD), WORKFLOW, 'tools/release/experience.py',
+    str(RECORD), WORKFLOW, 'README.md', 'tools/release/experience.py',
     'tools/release/test_experience.py', 'tools/release/README.md',
     'docs/releases/' + VERSION + '.md',
 }
@@ -40,16 +47,17 @@ def authorize(record, context, run, jobs, artifact, payload, notes):
     require(context['sha'] == context['remote_sha'], 'authorization is not current Experience')
     require(context['workflow_ref'] == REPO + '/' + WORKFLOW + '@refs/heads/Experience',
             'untrusted publication workflow')
-    require(record['schema'] == 1 and record['repository'] == REPO, 'invalid authorization')
+    require(record['schema'] == 2 and record['repository'] == REPO, 'invalid authorization')
     require(record['version'] == VERSION, 'unauthorized release version')
     require(context['version'] == record['version'], 'unauthorized tag')
     require(record['prerelease'] is True, 'only prereleases authorized')
     require(record['application_commit'] == context['application_commit'], 'wrong application commit')
     uat = record.get('windows_acceptance', {})
-    require(uat.get('status') == 'PASS' and uat.get('confirmed_by') == 'hyp36rmax',
-            'missing physical Windows acceptance')
-    require(uat.get('application_commit') == record['application_commit'] and
-            uat.get('artifact_sha256') == record['artifact_sha256'], 'acceptance identity mismatch')
+    require(uat.get('status') == 'PRESERVED_IMPLEMENTATION' and
+            uat.get('confirmed_by') == 'hyp36rmax', 'missing baseline acceptance')
+    require(uat.get('baseline_commit') == VALIDATED_BASELINE and
+            uat.get('exact_artifact_physical_test') == 'NOT_RUN', 'acceptance scope mismatch')
+    require(context.get('implementation_unchanged') is True, 'implementation differs from accepted baseline')
     require(run['id'] == record['ci_run_id'] and run['run_attempt'] == record['ci_run_attempt'],
             'wrong CI run or attempt')
     require(run['head_sha'] == record['application_commit'], 'CI source mismatch')
@@ -119,6 +127,17 @@ def absent(path):
     raise ValueError('publication target already exists: ' + path)
 
 
+def verify_implementation(application_commit):
+    """Keep the accepted implementation unchanged across the release-only update."""
+    subprocess.run(['git', 'merge-base', '--is-ancestor', VALIDATED_BASELINE,
+                    application_commit], check=True)
+    changed = set(subprocess.check_output(
+        ['git', 'diff', '--name-only', VALIDATED_BASELINE, application_commit],
+        text=True).splitlines())
+    require(changed <= RELEASE_CHANGES, 'implementation changed: ' + repr(changed - RELEASE_CHANGES))
+    return True
+
+
 def main():
     require(sys.argv[1:] in (['verify'], ['publish']), 'choose verify or publish')
     record = json.loads(RECORD.read_text())
@@ -138,7 +157,8 @@ def main():
     context = dict(repository=os.environ['GITHUB_REPOSITORY'], event=os.environ['GITHUB_EVENT_NAME'],
                    ref=os.environ['GITHUB_REF'], sha=local, remote_sha=remote,
                    workflow_ref=os.environ['GITHUB_WORKFLOW_REF'], default_branch=repo['default_branch'],
-                   version=VERSION, application_commit=record['application_commit'])
+                   version=VERSION, application_commit=record['application_commit'],
+                   implementation_unchanged=verify_implementation(record['application_commit']))
     run = request('/actions/runs/' + str(record['ci_run_id']))
     jobs = request('/actions/runs/' + str(record['ci_run_id']) + '/attempts/' +
                    str(record['ci_run_attempt']) + '/jobs?per_page=100')['jobs']

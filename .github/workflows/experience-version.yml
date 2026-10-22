@@ -23,8 +23,8 @@ jobs:
         run: |
           import hashlib, pathlib, shutil, urllib.request, zipfile
           path = pathlib.Path('original.zip')
-          urllib.request.urlretrieve('https://github.com/hyp36rmax/VO_PATCH_EX/releases/download/v0.18.0-experience.1/VO-PATCH-EX-Experience.zip', path)
-          assert hashlib.sha256(path.read_bytes()).hexdigest() == 'd9afa87394bc3b69e596c942064dd2be6b489d67f3cfdc61e265600d6c05f4d7'
+          urllib.request.urlretrieve('https://github.com/hyp36rmax/VO_PATCH_EX/releases/download/v0.18.0/VO-PATCH-EX-v0.18.0-Windows.zip', path)
+          assert hashlib.sha256(path.read_bytes()).hexdigest() == '715908e5f52764679b330d0ff4cff72d0fcdceb3a19a9984cd93f15a9659bbc7'
           with zipfile.ZipFile(path) as z: z.extractall('baseline')
           shutil.move('baseline/_internal/experience', 'inputs')
           pathlib.Path('wrapper').mkdir()

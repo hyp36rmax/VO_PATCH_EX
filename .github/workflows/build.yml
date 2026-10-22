@@ -356,10 +356,15 @@ jobs:
           # Exercise an identical copy so the manifested release stays unchanged.
           cp -r dist/experience build/experience-smoke
           timeout 60 build/experience-smoke/v-on-patcher.exe --selfcheck
+          python tools/experience/test_release_version.py build/experience-smoke
+          timeout 60 build/experience-smoke/_internal/python.exe -B build/experience-smoke/_internal/v-on-patcher.py --version
           python tools/experience/test_normal_package.py dist/experience
           python - <<'PYCODE'
           import shutil, zipfile
-          path = shutil.make_archive('dist/VO-PATCH-EX-Experience', 'zip', 'dist/experience')
+          import sys
+          sys.path.insert(0, 'tools/experience')
+          from release_version import VERSION
+          path = shutil.make_archive('dist/VO-PATCH-EX-' + VERSION + '-Windows', 'zip', 'dist/experience')
           with zipfile.ZipFile(path) as archive:
               assert archive.testzip() is None
           PYCODE

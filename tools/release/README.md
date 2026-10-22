@@ -1,59 +1,27 @@
 # Experience prerelease publication
 
-Experience releases promote an approved Windows ZIP. The application commit and
-publication-workflow commit are separate identities. The release tag points to the
-application commit; publication never rebuilds, stamps, signs or repackages the ZIP.
+Experience releases promote an approved Windows ZIP without rebuilding it. The release tag points to the application commit; the publication workflow can be a later infrastructure-only commit.
 
-## Authorization
+## Current authorization
 
-The sole authorized version is `v0.18.0-experience.1`. Its
-[authorization record](../../.github/release-authorizations/v0.18.0-experience.1.json)
-binds the application commit, CI run and attempt, artifact ID, ZIP checksum,
-release-note checksum and maintainer-confirmed physical Windows acceptance.
-Acceptance does not extend the hardware coverage documented in the release.
+The authorized version is `v0.18.0`, defined by `tools/experience/release_version.py`. Its authorization record binds the application commit, successful CI run and attempt, artifact ID, package size and SHA-256, and release-note checksum. The previous `v0.18.0-experience.1` record remains historical evidence.
 
-Run **Publish approved Experience prerelease** manually from the current
-`Experience` default branch. It accepts no version, commit, artifact or authorization
-inputs. Pull requests and other branches cannot authorize this workflow. The trusted
-checkout must match remote Experience and descend from the approved application
-commit with only the listed publication-infrastructure and release-note changes.
-Another release requires a reviewed record and implementation change; there is no
-wildcard approval.
+The accepted implementation baseline is `55bcb76425144d3e138b19e89e4f15887a218f68`, including merged PR #5. This release preserves that implementation. A separate Git ancestry and file-difference check rejects gameplay, controller, display, movie, recipe and networking changes. Only version presentation, release instructions and build validation/naming may differ.
 
-The read-only job runs rejection tests and verifies live GitHub CI metadata, all
-three required jobs and the original artifact. The publication job repeats the
-guard, creates the exact source tag and a draft prerelease, uploads the ZIP,
-downloads the draft asset to verify its checksum, checks the tag again, and
-publishes with `prerelease=true` and `make_latest=false`.
+Prior physical acceptance is retained as baseline evidence. The new artifact is **not** claimed physically tested. Exact-artifact Windows build and runtime checks are independently required. This distinction does not extend the documented hardware matrix.
 
-Only the publication job has `contents: write`; both jobs have `actions: read`.
-Authentication uses the ephemeral Actions token, without stored Git credentials,
-a PAT or signing secrets. Redirected downloads do not receive that token.
-Repository protections remain unchanged. Denied writes fail the workflow.
-Existing tags/releases are never rewritten. A partial failure can leave a source
-tag or draft for review; rerunning does not silently replace it.
+## Promotion
+
+Run **Publish approved Experience prerelease** manually from `Experience`. The workflow accepts no version, commit or artifact parameters. Both jobs validate current remote HEAD, trusted workflow identity, source ancestry, permitted infrastructure changes, exact CI provenance, successful required jobs and the artifact checksum.
+
+The write-scoped job repeats validation, creates a new source tag and draft prerelease, uploads the unchanged ZIP, downloads it to verify SHA-256, rechecks the tag, then publishes with `prerelease=true` and `make_latest=false`. Existing tags and releases cannot be overwritten. A failed partial publication requires inspection; reruns do not silently replace it.
+
+Only the publication job has `contents: write`. It uses the ephemeral Actions token and sends no credentials to redirected download hosts. Repository permissions and protections remain unchanged.
 
 ## Original tag workflow
 
-The application commit unconditionally rejects Experience tags in `build.yml`.
-Its native/package jobs also select integrated packaging by branch name. Removing
-that rejection would neither preserve the ZIP nor select proper tag packaging.
-The legacy path stays closed. The dedicated promotion workflow provides the
-explicit guarded authorization path; manually pushed Experience tags still fail.
+The original tag build remains closed to Experience. Its signing path does not select integrated Experience packaging. Promotion uses the already validated branch artifact; the Actions-created tag does not trigger a second build. The unsigned branch launcher retains its independent upstream version. Python runtime signatures and required dependency notices remain included.
 
-The Actions token creates the tag after authorization. GitHub does not trigger a
-new push workflow from this token, avoiding a legacy tag rebuild. The
-infrastructure-only commit uses `[skip ci]` to avoid the ordinary push build;
-the manual publication workflow still runs guard tests and checks the successful
-exact-source Windows build.
+## Verification and recovery
 
-## Verification
-
-```sh
-python3 tools/release/test_experience.py
-```
-
-Hosted verification checks the original artifact and ZIP CRC. Its cryptographic
-identity preserves the prior full-manifest, Retail/JPRE, controller, display,
-license, privacy and overlay-exclusion validation. After publication, independently
-inspect the public release and compare the downloaded ZIP's SHA-256.
+Run `python3 tools/release/test_experience.py` before dispatch. Independently download the public package and compare its SHA-256 after publication. Preserve the old release notes, asset hashes, verified asset copies and tag target before superseding it. Do not delete historical tags or assets.
