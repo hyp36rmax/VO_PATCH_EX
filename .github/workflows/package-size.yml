@@ -1,7 +1,7 @@
-name: Distribution size validation
+name: Compact distribution validation
 on:
   push:
-    branches: [maintenance/r0181-package-size]
+    branches: [maintenance/r0181-compact-catalog]
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,6 +19,7 @@ jobs:
       - run: pip install pyflakes unicorn pillow capstone
       - run: xvfb-run -a python tools/check.py
       - run: python tools/experience/test_package_compression.py
+      - run: python tools/experience/test_compact_catalog.py
       - run: python tools/experience/test_bosses.py
   windows:
     needs: verify
@@ -54,7 +55,7 @@ jobs:
           python tools/experience/package_normal.py candidate baseline inputs/catalog wrapper inputs/payload/vodisplay.dll
           python tools/experience/test_normal_package.py candidate
           python tools/experience/test_release_version.py candidate
-          python tools/experience/test_package_optimization.py original candidate
+          python tools/experience/test_compact_package.py original candidate
       - name: Exercise shipped Python, launcher and independent installed runtime
         shell: python
         run: |
@@ -62,6 +63,8 @@ jobs:
           root = pathlib.Path('candidate').resolve()
           subprocess.run([str(root/'_internal/python.exe'), '-B', 'tools/experience/test_normal_package.py', str(root)], check=True)
           subprocess.run([str(root/'_internal/python.exe'), '-B', str(root/'_internal/v-on-patcher.py'), '--version'], check=True)
+          code = "from pathlib import Path; from compact_catalog import Catalog; c=Catalog(Path('experience/catalog')); assert len(c.index['entries'])==2048; [c.read(n) for n in c.index['entries']]; print('PASS shipped compact loader: 2048 recipes')"
+          subprocess.run([str(root/'_internal/python.exe'), '-B', '-c', code], cwd=root/'_internal', check=True)
           smoke = pathlib.Path('launcher smoke').resolve()
           shutil.copytree(root, smoke)
           subprocess.run([str(smoke/'v-on-patcher.exe'), '--selfcheck'], check=True, timeout=60)
@@ -73,9 +76,9 @@ jobs:
           subprocess.run([str(runtime/'pythonw.exe'), '-B', '-c', code, str(result)], cwd=runtime.parent, check=True, timeout=60)
           assert result.read_text().startswith('PASS independent')
           pathlib.Path('patcher unavailable').rename(root)
-          shutil.make_archive('VO-PATCH-EX-v0.18.1-Optimized-Private-Windows-UAT', 'zip', root)
+          shutil.make_archive('VO-PATCH-EX-v0.18.1-Compact-Private-Windows-UAT', 'zip', root)
       - uses: actions/upload-artifact@v4
         with:
-          name: optimized-private-windows-uat
-          path: VO-PATCH-EX-v0.18.1-Optimized-Private-Windows-UAT.zip
+          name: compact-private-windows-uat
+          path: VO-PATCH-EX-v0.18.1-Compact-Private-Windows-UAT.zip
           retention-days: 7

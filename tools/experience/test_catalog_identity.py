@@ -1,5 +1,7 @@
 """Reconstruct every shipped option recipe and test strict activated VS identity."""
-import ast,hashlib,json,struct,sys,zipfile
+import ast,hashlib,json,struct,sys
+from contextlib import nullcontext
+from compact_catalog import Catalog
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'dual_display'))
 import startup_image as s
@@ -23,7 +25,7 @@ def accepted(image,base,stamp,size):
   if row[:3]==[base,stamp,size]:return image[row[3]-base:row[3]-base+32]==bytes(row[8])
  return False
 count=0
-with zipfile.ZipFile(catalog/'recipes.zip') as archive:
+with nullcontext(Catalog(catalog)) as archive:
  for folder in map(Path,sys.argv[2:]):
   raw=(folder/'v_on.exe').read_bytes();edition=v.BUILDS[hashlib.md5(raw).hexdigest()]
   for mask in range(1 << len(index['keys'])):
@@ -32,9 +34,12 @@ with zipfile.ZipFile(catalog/'recipes.zip') as archive:
    original,_,skipped=v.apply_selected(bytearray(raw),wanted,edition);assert not skipped
    if wanted.get('credits'):v.stamp_version(original,edition)
    recipe=json.loads(archive.read(f'{edition.short}/{mask}.json'))
+   assert hashlib.sha256(raw).hexdigest()==recipe['original']
+   assert recipe['edition']==edition.short and recipe['mask']==mask
    assert hashlib.sha256(original).hexdigest()==recipe['base']
    final=original+bytes(max(0,recipe['size']-len(original)))
    for offset,hexdata in recipe['writes']:final[offset:offset+len(bytes.fromhex(hexdata))]=bytes.fromhex(hexdata)
+   assert len(final)==recipe['size']
    assert hashlib.sha256(final).hexdigest()==recipe['final']
    pe=v._PE(final);image=s.mapped(final);boot=next(sec for sec in pe.sections if sec['name']==b'.voboot')
    table=boot['raddr']+512

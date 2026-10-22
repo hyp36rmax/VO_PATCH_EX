@@ -4,8 +4,9 @@ Only the packaged copy binds this adapter. Offline recipes are verified against
 both the pristine executable and the exact output of upstream Apply. No assembler
 or developer runtime is used on the player's machine.
 """
-import hashlib,json,os,shutil,zipfile,tempfile
+import hashlib,json,os,shutil,tempfile
 from pathlib import Path
+from compact_catalog import Catalog
 
 JOURNAL='.vo-ex-backup'
 def sha(data):return hashlib.sha256(data).hexdigest()
@@ -32,7 +33,7 @@ def bind(cls,scope,package):
     payload=json.loads((package/'payload-manifest.json').read_text())
     def recipe(edition,mask):
         name=f'{edition}/{mask}.json'
-        with zipfile.ZipFile(package/'catalog/recipes.zip') as z:data=z.read(name)
+        data=Catalog(package/'catalog', index).read(name)
         if sha(data)!=index['entries'][name]['sha256']:raise ValueError('Patch data integrity failure')
         return json.loads(data)
     def mask_for(wanted):return sum(1<<i for i,k in enumerate(index['keys']) if wanted.get(k))

@@ -1,6 +1,7 @@
 """Distribution integrity and game-asset exclusion, no Windows execution claim."""
 from pathlib import Path
 import hashlib,json,sys,zipfile
+from compact_catalog import Catalog
 root=Path(sys.argv[1]).resolve();internal=root/'_internal';ex=internal/'experience'
 manifest=json.loads((root/'PACKAGE-SHA256.json').read_text())
 assert {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()} == set(manifest) | {'PACKAGE-SHA256.json'}, 'Unmanifested package files'
@@ -20,13 +21,12 @@ assert (root/'v-on-patcher.exe').read_bytes()[:2]==b'MZ'
 assert (ex/'payload/vodisplay.dll').read_bytes()[:2]==b'MZ'
 index=json.loads((ex/'catalog/catalog.json').read_text())
 assert len(index['entries'])==2 * (1 << len(index['keys']))
-with zipfile.ZipFile(ex/'catalog/recipes.zip') as z:
- assert z.testzip() is None and set(z.namelist())==set(index['entries'])
- for name,entry in index['entries'].items():
-  data=z.read(name);assert hashlib.sha256(data).hexdigest()==entry['sha256']
-  recipe=json.loads(data);assert recipe['final']==entry['final']
-  # Recipes are sparse changes requiring a verified original, never full files.
-  assert sum(len(bytes.fromhex(x[1])) for x in recipe['writes'])<recipe['size']
+catalog=Catalog(ex/'catalog')
+for name,entry in index['entries'].items():
+ data=catalog.read(name);assert hashlib.sha256(data).hexdigest()==entry['sha256']
+ recipe=json.loads(data);assert recipe['final']==entry['final']
+ # Recipes are sparse changes requiring a verified original, never full files.
+ assert sum(len(bytes.fromhex(x[1])) for x in recipe['writes'])<recipe['size']
 for name in ['normal_lifecycle.py','diagnostics.py','discovery.py','movie_geometry.py','pythonw.exe','python312.dll','python312.zip']:
  assert (ex/'payload/experience-runtime'/name).is_file()
 print('PASS manifest hashes, complete sparse option recipes, upstream Windows launcher, runtime completeness, game-asset exclusion')

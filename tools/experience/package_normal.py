@@ -2,7 +2,7 @@
 import argparse,hashlib,json,os,shutil,subprocess
 from release_version import VERSION as RELEASE_VERSION, validate_release_tag
 from pathlib import Path
-from optimize_package import compress_recipes
+from compact_catalog import pack, NAME
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
@@ -17,8 +17,8 @@ def main():
  experience=internal/'experience';experience.mkdir()
  # The profile header is compiled into the wrapper, never read at runtime.
  (experience/'catalog').mkdir()
- for name in ('catalog.json','recipes.zip'):shutil.copy2(a.catalog/name,experience/'catalog'/name)
- compress_recipes(experience/'catalog')
+ shutil.copy2(a.catalog/'catalog.json',experience/'catalog/catalog.json')
+ pack(a.catalog, experience/'catalog'/NAME)
  # The original UI/source is used verbatim except for binding Apply/Restore's
  # private distribution adapter before main. No second installer or game launcher.
  source=(ROOT/'v-on-patcher.py').read_text();needle="if __name__ == '__main__':"
@@ -26,6 +26,7 @@ def main():
  adapter="from release_version import VERSION as _release_version, configure as _configure_version\n_configure_version(globals())\nif __name__ == '__main__' and '--version' in __import__('sys').argv[1:]:\n    print(_release_version)\n    raise SystemExit(0)\nfrom normal_install import bind as _experience_bind\n_experience_bind(Patcher, globals(), os.path.join(os.path.dirname(__file__), 'experience'))\n\n"
  (internal/'v-on-patcher.py').write_text(source.replace(needle,adapter+needle))
  shutil.copy2(HERE/'normal_install.py',internal/'normal_install.py')
+ shutil.copy2(HERE/'compact_catalog.py',internal/'compact_catalog.py')
  shutil.copy2(HERE/'release_version.py',internal/'release_version.py')
  payload=experience/'payload';payload.mkdir()
  shutil.copy2(a.helper,payload/'vodisplay.dll');shutil.copy2(a.wrapper/'ddraw.dll',payload/'ddraw.dll')

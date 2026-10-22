@@ -18,6 +18,12 @@ for source in map(Path,sys.argv[2:]):
   (root/'unrelated.txt').write_bytes(b'keep me')
   (root/'experience-runtime').mkdir();(root/'experience-runtime/user-notes.txt').write_text('keep too')
   original=snapshot(root);v=module();p=v.Patcher();assert p.load(str(root/'v_on.exe'))[1]
+  # Reject a changed original before upstream Apply or any runtime write.
+  exe=root/'v_on.exe';pristine=exe.read_bytes();exe.write_bytes(pristine[:-1]+bytes([pristine[-1]^1]))
+  changed=snapshot(root)
+  ok,log=p.apply(v.default_state());assert not ok,log
+  assert snapshot(root)==changed,'wrong source changed installation files'
+  exe.write_bytes(pristine)
   for wanted in (v.default_state(),dict(v.default_state(),hires=False,nodisc=False,debugbox=False,movie=False,credits=False), dict(v.default_state(),bossunlock=True), dict(v.default_state(),bosses=True), dict(v.default_state(),bosses=True,bossunlock=True)):
    ok,log=p.apply(wanted);assert ok,log
    assert json.loads((root/'experience-version.json').read_text())['movie_framing']==bool(wanted.get('movie'))

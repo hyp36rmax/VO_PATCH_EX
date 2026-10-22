@@ -27,3 +27,23 @@ The measured internal archive shrinks from 83,182,010 to 56,976,966 bytes. Repea
 The distribution-size workflow rebuilds only package assembly from the checksum-locked v0.18.1 release. It verifies unchanged retained runtime bytes, all recipe checksums, bundled-Python decoding, launcher selfcheck and a copied installed runtime with the patcher directory unavailable. Retail/JPRE Apply/Restore and full recipe reconstruction run locally against authorized original files.
 
 These checks do not establish physical Windows gameplay acceptance. The optimized candidate remains private test material until accepted; published release assets and application versions are unchanged.
+
+## Compact Experience catalog
+
+The compact distribution retains upstream Apply and applies the same verified
+Experience delta afterward. `compact_catalog.py` stores shared hex values once
+and deduplicates identical binary offset/value-ID lists, including pre-unlock
+aliases. The unchanged catalog index retains every option mask and recipe hash.
+Only the requested recipe is reconstructed and checked before installation.
+
+`recipes.bin.xz` contains a versioned header and little-endian write records.
+Decoding is bounded to 128 MiB, with a 4 MiB header and a 256 MiB LZMA memory
+limit. Invalid streams, missing entries, overlapping ranges, invalid references,
+wrong option identities and recipe hash mismatches fail closed. A corrupt compact
+file never falls back to legacy data. Legacy ZIP input remains supported for
+existing offline generation and regression fixtures.
+
+Source, upstream-result and final-image hashes, installation ownership, rollback
+and Restore remain authoritative. The installed runtime and native binaries are
+unchanged. The compact catalog is an installation resource, not a game runtime
+or a new patch engine. Windows acceptance is required before release.
