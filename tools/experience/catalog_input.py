@@ -12,7 +12,8 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 def sources():
-    paths = [ROOT / 'v-on-patcher.py', * (ROOT / 'asm').glob('*.asm'),
+    paths = [ROOT / 'v-on-patcher.py', ROOT / 'tools/experience/build_catalog.py',
+             ROOT / 'tools/experience/catalog_input.py', * (ROOT / 'asm').glob('*.asm'),
              * (ROOT / 'tools/dual_display').glob('*.py'),
              * (ROOT / 'tools/dual_display').glob('*.h'),
              * (ROOT / 'tools').glob('engineering*.py')]
@@ -41,7 +42,8 @@ def pack(catalog, destination):
 def unpack(source, destination):
     data = json.loads(lzma.decompress(source.read_bytes()))
     assert data['sources'] == sources(), 'Catalog source drift: regenerate and validate offline'
-    expected = {f'{edition}/{mask}.json' for edition in ('retail', 'jpre') for mask in range(256)}
+    assert data['index']['keys'] == ['hires', 'padxinput', 'nodisc', 'debugbox', 'defaults', 'sound', 'movie', 'credits', 'bosses', 'bossunlock']
+    expected = {f'{edition}/{mask}.json' for edition in ('retail', 'jpre') for mask in range(1 << len(data['index']['keys']))}
     assert set(data['recipes']) == set(data['index']['entries']) == expected
     destination.mkdir(parents=True, exist_ok=False)
     with zipfile.ZipFile(destination / 'recipes.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
@@ -55,7 +57,7 @@ def unpack(source, destination):
             archive.writestr(info, raw)
     (destination / 'catalog.json').write_text(json.dumps(data['index'], indent=2) + '\n')
     (destination / 'game_profiles.h').write_text(data['profiles'])
-    print('PASS source-locked catalog: 512 sparse recipes')
+    print('PASS source-locked catalog:', len(expected), 'sparse recipes')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

@@ -186,6 +186,22 @@ def main():
     def set_entry(entry, value):
         root.setvar(entry.cget('textvariable'), value)
 
+    # Boss dependency uses the actual Tk controls and their click handlers.
+    checks = {text_of(w): w for w in everything if isinstance(w, ttk.Checkbutton)}
+    boss = checks[vp.BY_KEY['bosses'][0]]
+    unlock = checks[vp.BY_KEY['bossunlock'][0]]
+    check('bosses default off', not root.getvar(boss.cget('variable')))
+    check('pre-unlock initially disabled', 'disabled' in unlock.state())
+    prior_disabled = 'disabled' in boss.state()
+    boss.state(['!disabled'])
+    boss.invoke(); pump()
+    check('bosses enables pre-unlock', 'disabled' not in unlock.state())
+    unlock.invoke(); pump()
+    boss.invoke(); pump()
+    check('disabling bosses clears and disables pre-unlock',
+          not root.getvar(unlock.cget('variable')) and 'disabled' in unlock.state())
+    if prior_disabled: boss.state(['disabled'])
+
     # ---- the source decides what is offered --------------------------
     check('nothing offered for an empty source',
           not enabled('Install game') and not enabled('Rip soundtrack'))

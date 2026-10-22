@@ -2700,9 +2700,10 @@ def _va_at(pe, off):
 def _make_writable(buf, pe, off):
     """Set the writable flag on the section holding file offset off.
 
-    For the F4 switch: f4_toggle copies the other size's bytes over live
-    code and data at runtime, so every section the table touches - .text
-    and .rdata included - stays writable for the life of the process."""
+    For the F4 switch, which copies the other size's bytes over live code
+    and data at runtime, so every section its table touches - .text and
+    .rdata included - stays writable for the life of the process; and for
+    the bosses' select, which writes the portrait frame's x into .rdata."""
     tab = pe.opt + pe.optsz
     for i, x in enumerate(pe.sections):
         if x['raddr'] <= off < x['raddr'] + x['rsize']:
@@ -2959,6 +2960,9 @@ EX_ATTRIBUTION = ('VO PATCH EX 0.1-dev — hyp36rmax\n'
                   'Controllers Expansion; Display Expansion (Windows acceptance pending).\n'
                   'Unified Overlay Menu Expansion: not included.\n'
                   'Independent community work; no SEGA or upstream endorsement.')
+BOSSES_CREDIT = 'Playable bosses by '
+BOSSES_AUTHOR = 'Vortyne'
+BOSSES_URL = 'https://github.com/Vortyne'
 REPO_URL = 'https://github.com/pairomaniac/v-on-patcher'
 EX_VERSION = '0.1-dev'
 PROJECT_URL = 'https://github.com/hyp36rmax/VO_PATCH_EX'
@@ -2996,7 +3000,7 @@ DISC_IMAGES = {
 
 class Build(object):
     def __init__(self, name, short, md5, size, stamp, sections, caves,
-                 symbols, art, sites=None, annex=None):
+                 symbols, art, sites=None, annex=None, own=None):
         # the name on screen, and a word for a label or a log line
         self.name, self.short = name, short
         self.md5, self.size = md5, size
@@ -3014,6 +3018,11 @@ class Build(object):
             va, raw = annex_place(size, sections)
             self.annex = (va, raw, tuple(annex))
             self.sections = tuple(sections) + ((raw, va),)
+        # Blobs with a section each of their own, appended after the annex
+        # only when their patch is ticked, in this order (OWN_SECTIONS).
+        # Where each lands follows from the annex, so they link at import
+        # too; own_place() says where.
+        self.own = tuple(own) if own else ()
         # the title artwork the banner patch redraws: name, size, MD5 (None
         # when no copy has been through here to take one from)
         self.art = art
@@ -3021,16 +3030,22 @@ class Build(object):
         # for the sites the table names by retail offset; None for retail
         self.sites = sites
 
+    def placed(self):
+        """(file offset, virtual address) of every section, the build's
+        own after the file's."""
+        return self.sections + tuple(
+            (raw, va) for va, raw in own_place(self).values())
+
     def va(self, off):
         """File offset -> virtual address."""
-        for raw, va in reversed(self.sections):
+        for raw, va in reversed(self.placed()):
             if off >= raw:
                 return off - raw + va
         raise ValueError('0x%x is in the headers' % off)
 
     def off(self, va):
         """Virtual address -> file offset."""
-        for raw, vaddr in reversed(self.sections):
+        for raw, vaddr in reversed(self.placed()):
             if va >= vaddr:
                 return va - vaddr + raw
         raise ValueError('0x%x is below the image' % va)
@@ -3055,6 +3070,13 @@ ANNEX_BLOBS = (
     'F11PAUSE', 'MOVIE', 'CREDITS', 'NAMEENTRY', 'CAMSKIP', 'OVERLAY',
     'TITLEVER', 'PAD_COND', 'PAD_BINDS', 'PAD_NAMES', 'PAD_PROFILES',
     'PAD_SIMPLEDEF', 'PAD_INIKEYS', 'EXTRAS_DATA', 'ACTIVATE', 'LOCKLINE', 'CUSTOM', 'CUSTOM_DLG', 'RAPH')
+
+# Blobs too big for the annex, each in a section of its own that
+# apply_annex appends only when its patch is ticked: the section's name,
+# and the patch. Written as far as the blob's last byte that is not zero;
+# the buffers gathered at its end are the section's virtual size, which
+# the loader zeroes.
+OWN_SECTIONS = {'BOSSES': ('.vobs', 'bosses')}
 
 RETAIL = Build('English retail', 'retail', ORIGINAL_MD5, EXE_SIZE,
                RETAIL_STAMP, sections=(
@@ -3103,6 +3125,10 @@ RETAIL = Build('English retail', 'retail', ORIGINAL_MD5, EXE_SIZE,
     'SAVELINE': -0xcc,              # and its line buffer
     'F_X': -0xc,                    # the movie placer's X and Y
     'F_Y': -0x10,
+    'DR_FLAG': -0xc,                # playable bosses: the round's anim deref
+    'CAM_PTR': -0x4,                # the live chase camera
+    'SCAN_SLOT': -0x1c,             # the ending camera's slot found
+    'PAL_CPU': -0xc,                # palette events: the CPU's on 5/7
     # The game
     'GAMEPADDEF': 0x0066d600,      # the gamepad's shipped binds
     'SPEEDSEL': 0x00be4308,        # the F5 speed choice
@@ -3224,8 +3250,219 @@ RETAIL = Build('English retail', 'retail', ORIGINAL_MD5, EXE_SIZE,
     'GETCLIENT': 0x0365d5d4,       # GetClientRect, the hooked one
     'MOVEWINDOW': 0x0365d5e0,      # MoveWindow
     'MCISEND': 0x0365d648,         # mciSendCommandA
+    # Playable bosses (asm/bosses.asm). A is player 1's copy of the fight
+    # machine, at 0x1ae0xxxx, the one a one-player game runs on.
+    'BS_IDLE': 0x005c6531,         # the loop's idle call
+    'BS_SFX': 0x00597311,          # sound effect, cdecl (id)
+    'BS_SCENEA': 0x01ae2e24,
+    'BS_G1PA': 0x01ae0c38,         # the player's machine id
+    'BS_MODEA': 0x01ae353c,        # A's mode, as its select reads it
+    'BS_COL0': 0x0069fff0,         # colour per machine, slots 1/3
+    'BS_COL1': 0x006a0010,         # and 5/7
+    'BS_OBJA': 0x01ae0c40,         # the player's object
+    'BS_CPUA': 0x01ae1240,         # the CPU's
+    'BS_IDA': 0x01ae0ca4,          # player object + 0x64, its id
+    'BS_MDLA': 0x01ae0cac,         # + 0x6c, its model header
+    'BS_JAGA': 0x0063bb48,         # model headers: Jaguarandi, Z-Gradt
+    'BS_ZGA': 0x0063d328,
+    'BS_STAGEA': 0x01ae3590,       # stage, 0 to 9
+    'BS_PALA': 0x006a0038,         # palette id -> a machine's eight pairs
+    'BS_PALSETA': 0x004f3491,      # (slot, palette)
+    'BS_PALFIXA': 0x004f362f,      # the loaders' path for ids above 7
+    'BS_PALRETA': 0x004f3646,      # and their epilogues
+    'BS_RPARTA': 0x00460d9d,       # PLAYER DATA: the model's parts draw
+    'BS_MPUSHA': 0x00408630,       # matrix stack: push, pop, scale
+    'BS_MPOPA': 0x004086b0,
+    'BS_MSCALEA': 0x00408790,
+    'BS_MIDENTA': 0x004086e0,       # the matrix made the identity
+    'BS_BARMESHA': 0x00791db0,      # the HUD's bar quad, its weapon and red materials
+    'BS_BARONA': 0x00791a70,
+    'BS_BARREDA': 0x00791ad0,
+    'BS_BARLIVEA': 0x00791b50,       # the live bar's, pulsing
+    'BS_CHARGEA': 0x004cfe83,       # the strips' CHARGING block (1), or its rows cleared (0)
+    'BS_RFLAG': 0x006bf5a4,        # the renderer flag a machine's draw sets
+    'BS_MATA': 0x01ae61e0,         # the current matrix
+    'BS_IDENTA': 0x004086e6,       # load identity, past its prologue
+    'BS_LIGHTA': 0x0345d254,       # a machine's shadow: the light, where
+    'BS_SHADEA': 0x0046b56e,       # it carries on, and past it
+    'BS_NOSHADEA': 0x0046b8fb,
+    'BS_ECBLKA': 0x01ae35e0,       # the ending's camera's block
+    'BS_ESTEPA': 0x01ad09f4,
+    'BS_ZSHADEA': 0x00404dc1,      # Z-Gradt's shadow: where it carries
+    'BS_ZNOSHADEA': 0x0040511c,    # on, and past it
+    'BS_WALLA': 0x0048f830,        # the floor's height, for a beam
+    'BS_SPDA': 0x01aea590,         # Z-Gradt's beam's speed (slot 0xcb)
+    'BS_SCANA': 0x0058aa86,        # the ending camera's slot scan, and
+    'BS_FOUNDA': 0x0058aac7,       # where it takes a slot found
+    'BS_SCANBASE': 0x600,          # what the scan adds to its start
+    'BS_ZTAB0': 0x00651360,        # Z-Gradt's tables, per side
+    'BS_ZTAB1': 0x00651690,
+    'BS_ZINITA': 0x00406375,       # Z-Gradt's setup
+    'BS_PH0A': 0x0058c1cc,         # the ending's phase 0
+    'BS_ZDRAWA': 0x00404042,       # Z-Gradt's draw, without its moves
+    'BS_MDRAWA': 0x00468e56,       # the eight's draw, from their routine
+    'BS_SCRPTR': 0x0345b288,       # the scene script being read
+    'BS_SELSCRA': 0x006218b8,      # the select's script
+    'BS_SELCUR': 0x0345bd68,       # a player's cursor, every 0x54
+    'BS_SELINVA': 0x00621898,      # the cursor of a machine
+    'BS_COLSEL': 0x006bea58,       # Machine Color Select
+    'BS_SELMDLA': 0x0059cb93,      # the select's model of a machine
+    'BS_SELINFOA': 0x0059c9b0,     # and its text for a cursor
+    'BS_FRAMEA': 0x01ae35a0,       # the frame counter
+    'BS_SELMODE': 0x006c84d0,
+    'BS_SELQINFOA': 0x005a1376,     # the quick select's texts for a cursor,
+    'BS_QTXTX': 0x006bea74,        # and where it puts them: the column,
+    'BS_QTXTY': 0x006bea7c,        # the row
+    'BS_SELHIDEX': 0x005a05df,      # the confirm's hiding of the machines, past it
+    'BS_PRINT1A': 0x004ce53b,      # text: print on each plane, place,
+    'BS_PRINT2A': 0x004ce573,      # clear a block, draw a block of tiles
+    'BS_TXTPOSA': 0x004cd8c3,
+    'BS_TCLEARA': 0x004cf4cc,
+    'BS_TBLOCKA': 0x004cf30c,
+    'BS_LOGOJ': 0x009337ba,        # the bosses' names, as tiles
+    'BS_LOGOZ': 0x009339b0,
+    'BS_ROW': 0x009310ba,          # the eight's portraits, 0x37 by 8
+    'BS_PLANE': 0x01cc18ea,        # the 2D plane they are drawn on
+    'BS_SELROWS': 0x00621708,      # the select's models
+    'BS_SELSWAP': 0x00621d68,      # and per machine the bone given
+    'BS_SELSPEC': 0x00621da8,      # spare meshes, and one drawn apart
+    'BS_SELLCAM': 0x00621e68,      # the launch's camera, a machine's
+    'BS_SELAHEAD': 0x00621ff8,     # how far ahead a machine is drawn
+    'BS_MFRAMEA': 0x0365142a,      # the frame a machine's motion is drawn at
+    'BS_SELPADS': 0x01ed5ec5,      # the pads' presses this frame, two
+    'BS_SELFLAME': 0x00621e28,     # a machine's booster flames, per frame
+    'BS_SELSKY': 0x006bea68,       # the hangar's outside shown,
+    'BS_SELIN': 0x006bea60,        # and its inside
+    'BS_SELTICKS': 0x01ad0a78,
+    'BS_STATEA': 0x01ae3690,       # A's state machine
+    'BS_DIFF': 0x01caf4c1,         # the difficulty, 2 Very Hard
+    'BS_LOSSA': 0x01ae3530,        # A's lost matches
+    'BS_REPLOGICA': 0x004608ef,    # PLAYER DATA's state 0x1e,
+    'BS_REPTEXTA': 0x004617a0,     # its text, its turning model
+    'BS_REPMODELA': 0x00460cf3,
+    'BS_REPCNT': 0x034155e4,       # and its frame
+    'BS_TCLRALL': 0x004cda9f,      # text: clear, reset, the large font
+    'BS_TRESET': 0x004cd542,
+    'BS_PRINTBIG': 0x004cefb2,
+    'BS_PADEDGE': 0x01ed5ebc,      # buttons pressed this frame
+    'BS_FADE': 0x004a38a0,         # fade, and end a scene
+    'BS_SCNEND': 0x00511a17,
+    'BS_FWRITE': 0x005e7590,       # and "wb"
+    'BS_WBMODE': 0x006beac4,
+    'BS_ARTPOOL': 0x0066c1a0,       # the 2D art, tile n at + n * 0x80
+    'BS_ARTPOOL2': 0x0066c1a8,      # the other bank, the count, .data's end
+    'BS_ARTCOUNT': 0x00bf5f7c,
+    'BS_ARTEND': 0x0365cb28,
+    'BS_MALLOC': 0x005e70d0,        # the C library's malloc
+    'BS_FREE': 0x005f2300,        # and its free
+    'BS_POLYCOL': 0x006db504,       # the polygon being queued's light
+    'BS_KEYA': 0x007086f0,         # the polygon's depth key, as the mesh draw keeps it
+    'BS_COLTAB': 0x0066c2c8,        # the polygons' colours, a row a plane
+    'BS_SCNNOW': 0x006a5068,        # and a texture bank
+    'BS_LOADTEX': 0x00510ecb,
+    'BS_FCBUF': 0x02c05e60,         # a scene's floor texture and model
+    'BS_FLDBUF': 0x03346560,
+    'BS_GLOW1': 0x006817f4,         # and its glow's state
+    'BS_GLOW2': 0x00bf6e70,
+    'BS_GLOW3': 0x00bf6e6c,
+    'BS_MTSELMEM': 0x0122ac70,      # MT_sel.bin read in, and its segment
+    'BS_SEGA': 0x006a4f60,
+    'BS_TXTX': 0x00bf7758,          # the text cursor's column
+    'BS_SLOTS': 0x006a0680,        # loaded files: where, and how much
+    'BS_LOADFILE': 0x005114e9,     # load one into the pool, by slot
+    'BS_RBNAMES': 0x006a05a0,      # the fight models' files
+    'BS_RBDIR': 0x02b05d50,
+    'BS_PATHFMT': 0x00651b34,
+    'BS_RBMODE': 0x006a50c8,
+    'BS_SPRINTF': 0x005e5f40,
+    'BS_FOPEN': 0x005e66b0,
+    'BS_FREAD': 0x005e73c0,
+    'BS_FCLOSE': 0x005e6400,
+    'BS_PALLOADA': 0x004f358b,
+    'BS_PALRAMA': 0x01cb5500,
+    'BS_SELOBJ': 0x0345b290,
+    'BS_SELCAM': 0x0345bd58,       # the scene camera's place
+    'BS_FRX': 0x006220d8,          # the portrait frame's x, in .rdata
+    'BS_HSITE': 0x0059e4ea,        # the hangar's call of the model, and
+    'BS_HDOFF': UI_HANGAR_DRAW,    # the widescreen hangar_draw in its blob
+    'BS_MESHA': 0x00514576,
+    'BS_POSEA': 0x005127eb,        # a fight model posed by a motion
+    'BS_ROTYA': 0x004088a0,
+    'BS_ROTZA': 0x00408940,
+    'BS_CREATEF': 0x0365d4cc,      # IAT: CreateFileA, SetFilePointer,
+    'BS_SEEKF': 0x0365d468,        # ReadFile, CloseHandle
+    'BS_READF': 0x0365d4bc,
+    'BS_CLOSEF': 0x0365d4b8,
+    'BS_ZPARTS': 0x00651360,       # Z-Gradt's parts its draw places:
+    'BS_ZRINGS': 0x006513b8,       # most, its rings, its crown, its
+    'BS_ZCROWN': 0x006515a8,       # side units (its first side's)
+    'BS_ZSIDES': 0x006515c0,
+    'BS_ROTXA': 0x00408800,        # turn the matrix about x, and hand
+    'BS_MSETA': 0x00514430,        # it to the renderer
+    'BS_FXA': 0x01acfa78,          # the effects tables: exhaust and such
+    'BS_FX2A': 0x01aceff0,
+    'BS_NAMEA': 0x005fbb78,        # and the machine names
+    'BS_LDA': 0x004f45ba,          # round animations: mode 0x80's loads
+    'BS_LDXA': 0x004f45d7,         # the extras after them
+    'BS_DRFA': 0x004f4635,         # the deref: through, je, past
+    'BS_DRJA': 0x004f4684,
+    'BS_DRSA': 0x004f46fb,
+    'BS_C2A': 0x004f47a4,          # mode 0xa
+    'BS_TIMEA': 0x01ad09f0,        # the ending's frame counter
+    'BS_PHASEA': 0x01ad0964,       # and phase
+    'BS_ENDA': 0x00590875,         # resume, phase 1, epilogue (the
+    'BS_END1A': 0x005908c4,        # button wait)
+    'BS_ENDEA': 0x005908f2,
+    'BS_VIEWA': 0x00408720,        # view translate, sin, cos
+    'BS_SINA': 0x004089e0,
+    'BS_COSA': 0x00408a00,
+    'BS_YAW4': 0x00bf7b94,         # the yaw the opening shots place the eye by
+    'BS_LIVEA': 0x00513584,        # the live camera, resume
+    'BS_READYA': 0x01ae35a4,       # frames since GET READY
+    'BS_INITA': 0x0040637b,        # Z-Gradt: init, resume
+    'BS_FLYA': 0x00407dda,         # fly-in: resume, landed, epilogue
+    'BS_FLYPA': 0x00407faa,
+    'BS_FLYEA': 0x004085c7,
+    'BS_ZMODA': 0x03651434,        # the model header its code reads
+    'BS_ZTIMA': 0x00a02d18,        # fly-in timer
+    'BS_RCOUNTA': 0x01ae2004,      # A's frames left in a state (GET READY's)
+    'BS_ARENA': 0x0345d260,        # the arena loaded, 0 to 9
+    'BS_ZBOXA': 0x004062bd,        # Z-Gradt's own floor query, the moon gate's box
+    'BS_FLOORA': 0x0048fe10,       # the arena's floor, the eight's query
+    'BS_TM2': 0x00406f42,          # the four timer locks: resume, skip
+    'BS_TM2S': 0x0040756f,
+    'BS_TM4': 0x00406e01,
+    'BS_TM4S': 0x00406ef8,
+    'BS_CLIP0A': 0x005b7038,       # clip banks: pad, AI
+    'BS_CLIP3A': 0x005b7052,
+    'BS_CLONEA': 0x00406557,       # model header clone, resume
+    'BS_CLONEFRAME': 0x44,         # the frame the clone's prologue makes
+    'BS_BSSA': 0x00a02b60,         # Z-Gradt's AI state: its globals' first,
+    'BS_AIDW': 0x78,               # its globals' length in dwords
+    'BS_AI1C': 0x1c,               # and seven of them, from the first:
+    'BS_AITIMER': 0x1b8,           # retail's +0x1c, the fly-in timer,
+    'BS_AILASER': 0x1c4,           # the laser's state, the side's
+    'BS_AITAB': 0x1bc,             # four tables
+    'BS_AITAB2': 0x1c0,
+    'BS_AITAB3': 0x4,
+    'BS_AITAB4': 0xd0,
+    'BS_TICKA': 0x005b8cd1,        # its AI tick, resume
+    'BS_EVA': 0x03415208,          # palette event, per handler
+    'BS_ZEVA': 0x00a02c34,         # and the one Z-Gradt's AI asks for
+    'BS_ZRA5': 0x004f4a52,         # event 0x200: slots 5/7, 1/3, the end
+    'BS_ZRA1': 0x004f4a75,
+    'BS_ZRAX': 0x004f4c38,
+    'BS_ZGA5': 0x004f4ad7,         # event 0x21f, gold: slots 5/7, 1/3
+    'BS_ZGA1': 0x004f4afa,
+    'BS_ZDA5': 0x004f4b47,         # events 0x401 on: slots 5/7, 1/3
+    'BS_ZDA1': 0x004f4b7a,
+    'BS_ZFA5': 0x004f4bd7,         # and 0x420 on
+    'BS_ZFA1': 0x004f4c0a,
+    'BS_WIND1': 0x00bf8508,        # the win camera's distance
+    'BS_RPITCH1': 0x00bf8460,      # the replay camera's pitch and yaw
+    'BS_RYAW1': 0x00bf8464,
 }, art=('escrgame.bin', 4194304, 'f0c2b33c6d32e8e25cee840a0de65dc0'),
-    annex=ANNEX_BLOBS)
+    annex=ANNEX_BLOBS, own=('BOSSES',))
 
 
 # The Japanese rerelease: the same source six months on, through a newer
@@ -3402,8 +3639,222 @@ JPRE = Build('Japanese rerelease', 'jpre', JPRE_MD5, JPRE_SIZE, 0x345107fa,
     'GETCLIENT': 0x036585e4,       # GetClientRect, the hooked one
     'MOVEWINDOW': 0x036585f0,      # MoveWindow
     'MCISEND': 0x0365864c,         # mciSendCommandA
+    # Playable bosses: retail's captions apply.
+    'DR_FLAG': -0x4,
+    'CAM_PTR': -0x8,
+    'SCAN_SLOT': -0x18,
+    'PAL_CPU': -0x4,
+    'BS_IDLE': 0x005c0e00,
+    'BS_SFX': 0x00592371,
+    'BS_SCENEA': 0x01addc54,
+    'BS_G1PA': 0x01adcd20,
+    'BS_MODEA': 0x01adb924,
+    'BS_COL0': 0x0069bd50,
+    'BS_COL1': 0x0069bd70,
+    'BS_OBJA': 0x01adb930,
+    'BS_CPUA': 0x01adbf40,
+    'BS_IDA': 0x01adb994,
+    'BS_MDLA': 0x01adb99c,
+    'BS_JAGA': 0x006368d0,
+    'BS_ZGA': 0x006380b0,
+    'BS_STAGEA': 0x01adb92c,
+    'BS_PALA': 0x0069bd98,
+    'BS_PALSETA': 0x004f04e1,
+    'BS_PALFIXA': 0x004f067f,
+    'BS_PALRETA': 0x004f0696,
+    'BS_RPARTA': 0x0045fe01,
+    'BS_MPUSHA': 0x004085a0,
+    'BS_MPOPA': 0x00408620,
+    'BS_MSCALEA': 0x00408700,
+    'BS_MIDENTA': 0x00408650,
+    'BS_BARMESHA': 0x0078db40,
+    'BS_BARONA': 0x0078d800,
+    'BS_BARREDA': 0x0078d860,
+    'BS_BARLIVEA': 0x0078d8e0,       # the live bar's, pulsing
+    'BS_CHARGEA': 0x004cda0d,
+    'BS_RFLAG': 0x006bb2bc,
+    'BS_MATA': 0x01ae0ef0,
+    'BS_IDENTA': 0x00408656,
+    'BS_LIGHTA': 0x03457e94,
+    'BS_SHADEA': 0x0046a5b2,
+    'BS_NOSHADEA': 0x0046a92c,
+    'BS_ECBLKA': 0x01adcd40,
+    'BS_ESTEPA': 0x01acb6a4,
+    'BS_ZSHADEA': 0x00404da1,
+    'BS_ZNOSHADEA': 0x004050e0,
+    'BS_WALLA': 0x0048e3f0,
+    'BS_SPDA': 0x01ae4560,
+    'BS_SCANA': 0x00585e5e,
+    'BS_FOUNDA': 0x00585e9f,
+    'BS_SCANBASE': 0x000005e0,
+    'BS_ZTAB0': 0x0064d360,
+    'BS_ZTAB1': 0x0064d690,
+    'BS_ZINITA': 0x00406301,
+    'BS_PH0A': 0x005874fc,
+    'BS_ZDRAWA': 0x00404022,
+    'BS_MDRAWA': 0x00467e9a,
+    'BS_SCRPTR': 0x03456968,
+    'BS_SELSCRA': 0x0061c640,
+    'BS_SELCUR': 0x034569b8,
+    'BS_SELINVA': 0x0061c620,
+    'BS_COLSEL': 0x006ba770,
+    'BS_SELMDLA': 0x00597993,
+    'BS_SELINFOA': 0x005977b0,
+    'BS_FRAMEA': 0x01adb8d4,
+    'BS_SELMODE': 0x006c41e8,
+    'BS_SELQINFOA': 0x0059c10e,     # the quick select's texts for a cursor,
+    'BS_QTXTX': 0x006ba78c,        # and where it puts them: the column,
+    'BS_QTXTY': 0x006ba794,        # the row
+    'BS_SELHIDEX': 0x0059b377,      # the confirm's hiding of the machines, past it
+    'BS_PRINT1A': 0x004cc0db,
+    'BS_PRINT2A': 0x004cc113,
+    'BS_TXTPOSA': 0x004cb463,
+    'BS_TCLEARA': 0x004cd06c,
+    'BS_TBLOCKA': 0x004cceac,
+    'BS_LOGOJ': 0x0092f36a,
+    'BS_LOGOZ': 0x0092f560,
+    'BS_ROW': 0x0092cc6a,
+    'BS_PLANE': 0x01cbc59a,
+    'BS_SELROWS': 0x0061c490,
+    'BS_SELSWAP': 0x0061caf0,
+    'BS_SELSPEC': 0x0061cb30,
+    'BS_SELLCAM': 0x0061cbf0,
+    'BS_SELAHEAD': 0x0061cd80,
+    'BS_MFRAMEA': 0x0364c07e,
+    'BS_SELPADS': 0x01ed0b65,
+    'BS_SELFLAME': 0x0061cbb0,
+    'BS_SELSKY': 0x006ba780,
+    'BS_SELIN': 0x006ba778,
+    'BS_SELTICKS': 0x01acb720,
+    'BS_STATEA': 0x01addc40,
+    'BS_DIFF': 0x01b27281,
+    'BS_LOSSA': 0x01addc4c,
+    'BS_REPLOGICA': 0x0045f96f,
+    'BS_REPTEXTA': 0x00460804,
+    'BS_REPMODELA': 0x0045fd73,
+    'BS_REPCNT': 0x03410250,
+    'BS_TCLRALL': 0x004cb63f,
+    'BS_TRESET': 0x004cb0e2,
+    'BS_PRINTBIG': 0x004ccb52,
+    'BS_PADEDGE': 0x01ed0b5c,
+    'BS_FADE': 0x004a23e0,
+    'BS_SCNEND': 0x0050e059,
+    'BS_FWRITE': 0x005e1120,
+    'BS_WBMODE': 0x006ba7dc,
+    'BS_ARTPOOL': 0x00668128,
+    'BS_ARTPOOL2': 0x00668130,
+    'BS_ARTCOUNT': 0x00bf0bdc,
+    'BS_ARTEND': 0x0365778c,
+    'BS_MALLOC': 0x005e0c60,
+    'BS_FREE': 0x005eccd0,
+    'BS_POLYCOL': 0x006d7294,
+    'BS_KEYA': 0x00704480,
+    'BS_COLTAB': 0x00668250,
+    'BS_SCNNOW': 0x006a0dc8,
+    'BS_LOADTEX': 0x0050d43b,
+    'BS_FCBUF': 0x02732480,
+    'BS_FLDBUF': 0x01ff8d00,
+    'BS_GLOW1': 0x0067d77c,
+    'BS_GLOW2': 0x00bf1a70,
+    'BS_GLOW3': 0x00bf1a74,
+    'BS_MTSELMEM': 0x00b53ed0,
+    'BS_SEGA': 0x006a0cc0,
+    'BS_TXTX': 0x00bf23ac,
+    'BS_SLOTS': 0x0069c3e0,
+    'BS_LOADFILE': 0x0050dbbb,
+    'BS_RBNAMES': 0x0069c300,
+    'BS_RBDIR': 0x02772b80,
+    'BS_PATHFMT': 0x0064db34,
+    'BS_RBMODE': 0x006a0e28,
+    'BS_SPRINTF': 0x005dfa40,
+    'BS_FOPEN': 0x005e0240,
+    'BS_FREAD': 0x005e0f50,
+    'BS_FCLOSE': 0x005dff90,
+    'BS_PALLOADA': 0x004f05db,
+    'BS_PALRAMA': 0x01b13260,
+    'BS_SELOBJ': 0x03455d50,
+    'BS_SELCAM': 0x034569a8,
+    'BS_FRX': 0x0061ce60,
+    'BS_HSITE': 0x005992ea,
+    'BS_HDOFF': UI_HANGAR_DRAW,    # Experience UI has an eight-byte prefix adjustment
+    'BS_MESHA': 0x00510aa6,
+    'BS_POSEA': 0x0050eddb,
+    'BS_ROTYA': 0x00408810,
+    'BS_ROTZA': 0x004088b0,
+    'BS_CREATEF': 0x036584d0,
+    'BS_SEEKF': 0x0365846c,
+    'BS_READF': 0x036584cc,
+    'BS_CLOSEF': 0x036584d4,
+    'BS_ZPARTS': 0x0064d360,
+    'BS_ZRINGS': 0x0064d3b8,
+    'BS_ZCROWN': 0x0064d5a8,
+    'BS_ZSIDES': 0x0064d5c0,
+    'BS_ROTXA': 0x00408770,
+    'BS_MSETA': 0x00510960,
+    'BS_FXA': 0x01ac9c68,
+    'BS_FX2A': 0x01aca510,
+    'BS_NAMEA': 0x005f6b78,
+    'BS_LDA': 0x004f160a,
+    'BS_LDXA': 0x004f1627,
+    'BS_DRFA': 0x004f1685,
+    'BS_DRJA': 0x004f16d4,
+    'BS_DRSA': 0x004f174b,
+    'BS_C2A': 0x004f17f4,
+    'BS_TIMEA': 0x01acb40c,
+    'BS_PHASEA': 0x01acb68c,
+    'BS_ENDA': 0x0058b8c9,
+    'BS_END1A': 0x0058b918,
+    'BS_ENDEA': 0x0058b946,
+    'BS_VIEWA': 0x00408690,
+    'BS_SINA': 0x00408950,
+    'BS_COSA': 0x00408970,
+    'BS_YAW4': 0x00bf3040,
+    'BS_LIVEA': 0x0050fb74,
+    'BS_READYA': 0x01adb8e0,
+    'BS_INITA': 0x00406307,
+    'BS_FLYA': 0x00407d4a,
+    'BS_FLYPA': 0x00407f1a,
+    'BS_FLYEA': 0x00408537,
+    'BS_ZMODA': 0x0364c088,
+    'BS_ZTIMA': 0x009fd960,
+    'BS_RCOUNTA': 0x01ade354,
+    'BS_ARENA': 0x03457ea4,
+    'BS_ZBOXA': 0x00406249,        # Z-Gradt's own floor query, the moon gate's box
+    'BS_FLOORA': 0x0048e960,       # the arena's floor, the eight's query
+    'BS_TM2': 0x00406ece,
+    'BS_TM2S': 0x004074df,
+    'BS_TM4': 0x00406d8d,
+    'BS_TM4S': 0x00406e84,
+    'BS_CLIP0A': 0x005b1aa0,
+    'BS_CLIP3A': 0x005b1aba,
+    'BS_CLONEA': 0x004064e3,
+    'BS_CLONEFRAME': 0x0000000c,
+    'BS_BSSA': 0x009fd7b0,
+    'BS_AIDW': 0x7a,
+    'BS_AI1C': 0x1b4,
+    'BS_AITIMER': 0x1b0,
+    'BS_AILASER': 0x4,
+    'BS_AITAB': 0x28,
+    'BS_AITAB2': 0xec,
+    'BS_AITAB3': 0x20,
+    'BS_AITAB4': 0x18,
+    'BS_TICKA': 0x005b36a9,
+    'BS_EVA': 0x0340fe6c,
+    'BS_ZEVA': 0x009fd7d4,
+    'BS_ZRA5': 0x004f1aa2,
+    'BS_ZRA1': 0x004f1ac5,
+    'BS_ZRAX': 0x004f1c88,
+    'BS_ZGA5': 0x004f1b27,
+    'BS_ZGA1': 0x004f1b4a,
+    'BS_ZDA5': 0x004f1b97,
+    'BS_ZDA1': 0x004f1bca,
+    'BS_ZFA5': 0x004f1c27,
+    'BS_ZFA1': 0x004f1c5a,
+    'BS_WIND1': 0x00bf316c,
+    'BS_RPITCH1': 0x00bf3124,
+    'BS_RYAW1': 0x00bf3128,
 }, art=('jscrgame.bin', 4194304, '1d892aeb30bb517f57e7d289ed2f4389'),
-   sites=None, annex=ANNEX_BLOBS)
+   sites=None, annex=ANNEX_BLOBS, own=('BOSSES',))
 
 # The USA OEM pressing: the same toolchain a month before retail, and the
 # closest of the builds to it - 7852 of 7934 functions match, 7593
@@ -3451,6 +3902,10 @@ OEM = Build('USA OEM', 'oem', OEM_MD5, OEM_SIZE, 0x3317246a, sections=(
     'SAVELINE': -0xcc,
     'F_X': -0xc,
     'F_Y': -0x10,
+    'DR_FLAG': -0xc,
+    'CAM_PTR': -0x4,
+    'SCAN_SLOT': -0x1c,
+    'PAL_CPU': -0xc,
     'GAMEPADDEF': 0x0066d5f8,   # data 1 votes
     'SPEEDSEL': 0x00be42c8,
     'FRAMEDIV': 0x006c8468,
@@ -3571,7 +4026,218 @@ OEM = Build('USA OEM', 'oem', OEM_MD5, OEM_SIZE, 0x3317246a, sections=(
     'GETCLIENT': 0x0365d608,   # iat GetClientRect
     'MOVEWINDOW': 0x0365d614,   # iat MoveWindow
     'MCISEND': 0x0365d67c,   # iat mciSendCommandA
-}, art=RETAIL.art, sites=None, annex=ANNEX_BLOBS)   # retail's art
+    # Playable bosses: retail's captions apply.
+    'BS_IDLE': 0x005c604a,
+    'BS_SFX': 0x00596de1,
+    'BS_SCENEA': 0x01ae2db4,
+    'BS_G1PA': 0x01ae0bc8,
+    'BS_MODEA': 0x01ae34cc,
+    'BS_COL0': 0x0069ffe8,
+    'BS_COL1': 0x006a0008,
+    'BS_OBJA': 0x01ae0bd0,
+    'BS_CPUA': 0x01ae11d0,
+    'BS_IDA': 0x01ae0c34,
+    'BS_MDLA': 0x01ae0c3c,
+    'BS_JAGA': 0x0063bb38,
+    'BS_ZGA': 0x0063d318,
+    'BS_STAGEA': 0x01ae3520,
+    'BS_PALA': 0x006a0030,
+    'BS_PALSETA': 0x004f3331,
+    'BS_PALFIXA': 0x004f34cf,
+    'BS_PALRETA': 0x004f34e6,
+    'BS_RPARTA': 0x00460cfd,
+    'BS_MPUSHA': 0x00408630,
+    'BS_MPOPA': 0x004086b0,
+    'BS_MSCALEA': 0x00408790,
+    'BS_MIDENTA': 0x004086e0,
+    'BS_BARMESHA': 0x00791d70,
+    'BS_BARONA': 0x00791a30,
+    'BS_BARREDA': 0x00791a90,
+    'BS_BARLIVEA': 0x00791b10,       # the live bar's, pulsing
+    'BS_CHARGEA': 0x004cfd23,
+    'BS_RFLAG': 0x006bf53c,
+    'BS_MATA': 0x01ae6170,
+    'BS_IDENTA': 0x004086e6,
+    'BS_LIGHTA': 0x0345d1e4,
+    'BS_SHADEA': 0x0046b46e,
+    'BS_NOSHADEA': 0x0046b7fb,
+    'BS_ECBLKA': 0x01ae3570,
+    'BS_ESTEPA': 0x01ad098c,
+    'BS_ZSHADEA': 0x00404dc1,
+    'BS_ZNOSHADEA': 0x0040511c,
+    'BS_WALLA': 0x0048f6f0,
+    'BS_SPDA': 0x01aea520,
+    'BS_SCANA': 0x0058a556,
+    'BS_FOUNDA': 0x0058a597,
+    'BS_SCANBASE': 0x600,
+    'BS_ZTAB0': 0x00651358,
+    'BS_ZTAB1': 0x00651688,
+    'BS_ZINITA': 0x00406375,
+    'BS_PH0A': 0x0058bc9c,
+    'BS_ZDRAWA': 0x00404042,
+    'BS_MDRAWA': 0x00468d56,
+    'BS_SCRPTR': 0x0345b218,
+    'BS_SELSCRA': 0x006218a8,
+    'BS_SELCUR': 0x0345bcf8,
+    'BS_SELINVA': 0x00621888,
+    'BS_COLSEL': 0x006be9f0,
+    'BS_SELMDLA': 0x0059c663,
+    'BS_SELINFOA': 0x0059c480,
+    'BS_FRAMEA': 0x01ae3530,
+    'BS_SELMODE': 0x006c8468,
+    'BS_SELQINFOA': 0x005a0e46,     # the quick select's texts for a cursor,
+    'BS_QTXTX': 0x006bea0c,        # and where it puts them: the column,
+    'BS_QTXTY': 0x006bea14,        # the row
+    'BS_SELHIDEX': 0x005a00af,      # the confirm's hiding of the machines, past it
+    'BS_PRINT1A': 0x004ce3db,
+    'BS_PRINT2A': 0x004ce413,
+    'BS_TXTPOSA': 0x004cd763,
+    'BS_TCLEARA': 0x004cf36c,
+    'BS_TBLOCKA': 0x004cf1ac,
+    'BS_LOGOJ': 0x0093377a,
+    'BS_LOGOZ': 0x00933970,
+    'BS_ROW': 0x0093107a,
+    'BS_PLANE': 0x01cc187a,
+    'BS_SELROWS': 0x006216f8,
+    'BS_SELSWAP': 0x00621d58,
+    'BS_SELSPEC': 0x00621d98,
+    'BS_SELLCAM': 0x00621e58,
+    'BS_SELAHEAD': 0x00621fe8,
+    'BS_MFRAMEA': 0x036513ba,
+    'BS_SELPADS': 0x01ed5e55,
+    'BS_SELFLAME': 0x00621e18,
+    'BS_SELSKY': 0x006bea00,
+    'BS_SELIN': 0x006be9f8,
+    'BS_SELTICKS': 0x01ad0a10,
+    'BS_STATEA': 0x01ae3620,
+    'BS_DIFF': 0x01caf451,
+    'BS_LOSSA': 0x01ae34c0,
+    'BS_REPLOGICA': 0x0046084f,
+    'BS_REPTEXTA': 0x00461700,
+    'BS_REPMODELA': 0x00460c53,
+    'BS_REPCNT': 0x03415574,
+    'BS_TCLRALL': 0x004cd93f,
+    'BS_TRESET': 0x004cd3e2,
+    'BS_PRINTBIG': 0x004cee52,
+    'BS_PADEDGE': 0x01ed5e4c,
+    'BS_FADE': 0x004a3740,
+    'BS_SCNEND': 0x00511587,
+    'BS_FWRITE': 0x005e70d0,
+    'BS_WBMODE': 0x006bea5c,
+    'BS_ARTPOOL': 0x0066c198,
+    'BS_ARTPOOL2': 0x0066c1a0,
+    'BS_ARTCOUNT': 0x00bf5f3c,
+    'BS_ARTEND': 0x0365cab8,
+    'BS_MALLOC': 0x005e6c10,
+    'BS_FREE': 0x005f1e40,
+    'BS_POLYCOL': 0x006db4c4,
+    'BS_KEYA': 0x007086b0,
+    'BS_COLTAB': 0x0066c2c0,
+    'BS_SCNNOW': 0x006a5000,
+    'BS_LOADTEX': 0x00510a3b,
+    'BS_FCBUF': 0x02c05df0,
+    'BS_FLDBUF': 0x033464f0,
+    'BS_GLOW1': 0x006817ec,
+    'BS_GLOW2': 0x00bf6e30,
+    'BS_GLOW3': 0x00bf6e2c,
+    'BS_MTSELMEM': 0x0122ac08,
+    'BS_SEGA': 0x006a4ef8,
+    'BS_TXTX': 0x00bf7718,
+    'BS_SLOTS': 0x006a0618,
+    'BS_LOADFILE': 0x00511059,
+    'BS_RBNAMES': 0x006a0538,
+    'BS_RBDIR': 0x02b05ce0,
+    'BS_PATHFMT': 0x00651b2c,
+    'BS_RBMODE': 0x006a5060,
+    'BS_SPRINTF': 0x005e5a80,
+    'BS_FOPEN': 0x005e61f0,
+    'BS_FREAD': 0x005e6f00,
+    'BS_FCLOSE': 0x005e5f40,
+    'BS_PALLOADA': 0x004f342b,
+    'BS_PALRAMA': 0x01cb5490,
+    'BS_SELOBJ': 0x0345b220,
+    'BS_SELCAM': 0x0345bce8,
+    'BS_FRX': 0x006220c8,
+    'BS_HSITE': 0x0059dfba,
+    'BS_HDOFF': UI_HANGAR_DRAW,
+    'BS_MESHA': 0x005140e6,
+    'BS_POSEA': 0x0051235b,
+    'BS_ROTYA': 0x004088a0,
+    'BS_ROTZA': 0x00408940,
+    'BS_CREATEF': 0x0365d500,
+    'BS_SEEKF': 0x0365d490,
+    'BS_READF': 0x0365d4f0,
+    'BS_CLOSEF': 0x0365d4ec,
+    'BS_ZPARTS': 0x00651358,
+    'BS_ZRINGS': 0x006513b0,
+    'BS_ZCROWN': 0x006515a0,
+    'BS_ZSIDES': 0x006515b8,
+    'BS_ROTXA': 0x00408800,
+    'BS_MSETA': 0x00513fa0,
+    'BS_FXA': 0x01acfa10,
+    'BS_FX2A': 0x01acef88,
+    'BS_NAMEA': 0x005fbb78,
+    'BS_LDA': 0x004f445a,
+    'BS_LDXA': 0x004f4477,
+    'BS_DRFA': 0x004f44d5,
+    'BS_DRJA': 0x004f4524,
+    'BS_DRSA': 0x004f459b,
+    'BS_C2A': 0x004f4644,
+    'BS_TIMEA': 0x01ad0988,
+    'BS_PHASEA': 0x01ad08fc,
+    'BS_ENDA': 0x00590345,
+    'BS_END1A': 0x00590394,
+    'BS_ENDEA': 0x005903c2,
+    'BS_VIEWA': 0x00408720,
+    'BS_SINA': 0x004089e0,
+    'BS_COSA': 0x00408a00,
+    'BS_YAW4': 0x00bf7b54,
+    'BS_LIVEA': 0x005130f4,
+    'BS_READYA': 0x01ae3534,
+    'BS_INITA': 0x0040637b,
+    'BS_FLYA': 0x00407dda,
+    'BS_FLYPA': 0x00407faa,
+    'BS_FLYEA': 0x004085c7,
+    'BS_ZMODA': 0x036513c4,
+    'BS_ZTIMA': 0x00a02cd8,
+    'BS_RCOUNTA': 0x01ae1f94,
+    'BS_ARENA': 0x0345d1f0,
+    'BS_ZBOXA': 0x004062bd,        # Z-Gradt's own floor query, the moon gate's box
+    'BS_FLOORA': 0x0048fcd0,       # the arena's floor, the eight's query
+    'BS_TM2': 0x00406f42,
+    'BS_TM2S': 0x0040756f,
+    'BS_TM4': 0x00406e01,
+    'BS_TM4S': 0x00406ef8,
+    'BS_CLIP0A': 0x005b6b08,
+    'BS_CLIP3A': 0x005b6b22,
+    'BS_CLONEA': 0x00406557,
+    'BS_CLONEFRAME': 0x44,
+    'BS_BSSA': 0x00a02b20,
+    'BS_AIDW': 0x78,
+    'BS_AI1C': 0x1c,
+    'BS_AITIMER': 0x1b8,
+    'BS_AILASER': 0x1c4,
+    'BS_AITAB': 0x1bc,
+    'BS_AITAB2': 0x1c0,
+    'BS_AITAB3': 0x4,
+    'BS_AITAB4': 0xd0,
+    'BS_TICKA': 0x005b87a1,
+    'BS_EVA': 0x03415198,
+    'BS_ZEVA': 0x00a02bf4,
+    'BS_ZRA5': 0x004f48f2,
+    'BS_ZRA1': 0x004f4915,
+    'BS_ZRAX': 0x004f4ad8,
+    'BS_ZGA5': 0x004f4977,
+    'BS_ZGA1': 0x004f499a,
+    'BS_ZDA5': 0x004f49e7,
+    'BS_ZDA1': 0x004f4a1a,
+    'BS_ZFA5': 0x004f4a77,
+    'BS_ZFA1': 0x004f4aaa,
+    'BS_WIND1': 0x00bf84a0,
+    'BS_RPITCH1': 0x00bf8420,
+    'BS_RYAW1': 0x00bf8424,
+}, art=RETAIL.art, sites=None, annex=ANNEX_BLOBS,     # retail's art
+    own=('BOSSES',))
 
 # The Japanese original, 1.04J (February 1997, four days before the OEM):
 # the oldest build, and laid out like the OEM - the same cpuid32.dll
@@ -3740,7 +4406,222 @@ JP = Build('Japanese original', 'jp', JP_MD5, JP_SIZE,
     'GETCLIENT': 0x0365c608,   # iat GetClientRect
     'MOVEWINDOW': 0x0365c614,   # iat MoveWindow
     'MCISEND': 0x0365c67c,   # iat mciSendCommandA
-}, art=JPRE.art, sites=None, annex=ANNEX_BLOBS)    # the rerelease's art
+    # Playable bosses: retail's captions apply.
+    'DR_FLAG': -0xc,
+    'CAM_PTR': -0x4,
+    'SCAN_SLOT': -0x1c,
+    'PAL_CPU': -0xc,
+    'BS_IDLE': 0x005c541a,
+    'BS_SFX': 0x005961b1,
+    'BS_SCENEA': 0x01ae1944,
+    'BS_G1PA': 0x01adf758,
+    'BS_MODEA': 0x01ae205c,
+    'BS_COL0': 0x0069ed48,
+    'BS_COL1': 0x0069ed68,
+    'BS_OBJA': 0x01adf760,
+    'BS_CPUA': 0x01adfd60,
+    'BS_IDA': 0x01adf7c4,
+    'BS_MDLA': 0x01adf7cc,
+    'BS_JAGA': 0x0063a8c0,
+    'BS_ZGA': 0x0063c0a0,
+    'BS_STAGEA': 0x01ae20b0,
+    'BS_PALA': 0x0069ed90,
+    'BS_PALSETA': 0x004f2d21,
+    'BS_PALFIXA': 0x004f2ebf,
+    'BS_PALRETA': 0x004f2ed6,
+    'BS_RPARTA': 0x00460cfd,
+    'BS_MPUSHA': 0x00408630,
+    'BS_MPOPA': 0x004086b0,
+    'BS_MSCALEA': 0x00408790,
+    'BS_MIDENTA': 0x004086e0,
+    'BS_BARMESHA': 0x00790ae0,
+    'BS_BARONA': 0x007907a0,
+    'BS_BARREDA': 0x00790800,
+    'BS_BARLIVEA': 0x00790880,       # the live bar's, pulsing
+    'BS_CHARGEA': 0x004cfe03,
+    'BS_RFLAG': 0x006be29c,
+    'BS_MATA': 0x01ae4d00,
+    'BS_IDENTA': 0x004086e6,
+    'BS_LIGHTA': 0x0345bd74,
+    'BS_SHADEA': 0x0046b46e,
+    'BS_NOSHADEA': 0x0046b7fb,
+    'BS_ECBLKA': 0x01ae2100,
+    'BS_ESTEPA': 0x01acf51c,
+    'BS_ZSHADEA': 0x00404dc1,
+    'BS_ZNOSHADEA': 0x0040511c,
+    'BS_WALLA': 0x0048f7f0,
+    'BS_SPDA': 0x01ae90b0,
+    'BS_SCANA': 0x00589926,
+    'BS_FOUNDA': 0x00589967,
+    'BS_SCANBASE': 0x600,
+    'BS_ZTAB0': 0x00650358,
+    'BS_ZTAB1': 0x00650688,
+    'BS_ZINITA': 0x00406375,
+    'BS_PH0A': 0x0058b06c,
+    'BS_ZDRAWA': 0x00404042,
+    'BS_MDRAWA': 0x00468d56,
+    'BS_SCRPTR': 0x03459da8,
+    'BS_SELSCRA': 0x00620630,
+    'BS_SELCUR': 0x0345a888,
+    'BS_SELINVA': 0x00620610,
+    'BS_COLSEL': 0x006bd750,
+    'BS_SELMDLA': 0x0059ba33,
+    'BS_SELINFOA': 0x0059b850,
+    'BS_FRAMEA': 0x01ae20c0,
+    'BS_SELMODE': 0x006c71c8,
+    'BS_SELQINFOA': 0x005a0216,     # the quick select's texts for a cursor,
+    'BS_QTXTX': 0x006bd76c,        # and where it puts them: the column,
+    'BS_QTXTY': 0x006bd774,        # the row
+    'BS_SELHIDEX': 0x0059f47f,      # the confirm's hiding of the machines, past it
+    'BS_PRINT1A': 0x004ce4bb,
+    'BS_PRINT2A': 0x004ce4f3,
+    'BS_TXTPOSA': 0x004cd843,
+    'BS_TCLEARA': 0x004cf44c,
+    'BS_TBLOCKA': 0x004cf28c,
+    'BS_LOGOJ': 0x0093230a,
+    'BS_LOGOZ': 0x00932500,
+    'BS_ROW': 0x0092fc0a,
+    'BS_PLANE': 0x01cc040a,
+    'BS_SELROWS': 0x00620480,
+    'BS_SELSWAP': 0x00620ae0,
+    'BS_SELSPEC': 0x00620b20,
+    'BS_SELLCAM': 0x00620be0,
+    'BS_SELAHEAD': 0x00620d70,
+    'BS_MFRAMEA': 0x0364ff4a,
+    'BS_SELPADS': 0x01ed49e5,
+    'BS_SELFLAME': 0x00620ba0,
+    'BS_SELSKY': 0x006bd760,
+    'BS_SELIN': 0x006bd758,
+    'BS_SELTICKS': 0x01acf5a0,
+    'BS_STATEA': 0x01ae21b0,
+    'BS_DIFF': 0x01cadfe1,
+    'BS_LOSSA': 0x01ae2050,
+    'BS_REPLOGICA': 0x0046084f,
+    'BS_REPTEXTA': 0x00461700,
+    'BS_REPMODELA': 0x00460c53,
+    'BS_REPCNT': 0x03414104,
+    'BS_TCLRALL': 0x004cda1f,
+    'BS_TRESET': 0x004cd4c2,
+    'BS_PRINTBIG': 0x004cef32,
+    'BS_PADEDGE': 0x01ed49dc,
+    'BS_FADE': 0x004a3840,
+    'BS_SCNEND': 0x00510f77,
+    'BS_FWRITE': 0x005e6470,
+    'BS_WBMODE': 0x006bd7bc,
+    'BS_ARTPOOL': 0x0066b120,
+    'BS_ARTPOOL2': 0x0066b128,
+    'BS_ARTCOUNT': 0x00bf4acc,
+    'BS_ARTEND': 0x0365b648,
+    'BS_MALLOC': 0x005e5fb0,
+    'BS_FREE': 0x005f11e0,
+    'BS_POLYCOL': 0x006da234,
+    'BS_KEYA': 0x00707420,
+    'BS_COLTAB': 0x0066b248,
+    'BS_SCNNOW': 0x006a3d60,
+    'BS_LOADTEX': 0x0051042b,
+    'BS_FCBUF': 0x02c04980,
+    'BS_FLDBUF': 0x03345080,
+    'BS_GLOW1': 0x00680774,
+    'BS_GLOW2': 0x00bf59c0,
+    'BS_GLOW3': 0x00bf59bc,
+    'BS_MTSELMEM': 0x01229798,
+    'BS_SEGA': 0x006a3c58,
+    'BS_TXTX': 0x00bf62a8,
+    'BS_SLOTS': 0x0069f378,
+    'BS_LOADFILE': 0x00510a49,
+    'BS_RBNAMES': 0x0069f298,
+    'BS_RBDIR': 0x02b04870,
+    'BS_PATHFMT': 0x00650b2c,
+    'BS_RBMODE': 0x006a3dc0,
+    'BS_SPRINTF': 0x005e4e20,
+    'BS_FOPEN': 0x005e5590,
+    'BS_FREAD': 0x005e62a0,
+    'BS_FCLOSE': 0x005e52e0,
+    'BS_PALLOADA': 0x004f2e1b,
+    'BS_PALRAMA': 0x01cb4020,
+    'BS_SELOBJ': 0x03459db0,
+    'BS_SELCAM': 0x0345a878,
+    'BS_FRX': 0x00620e50,
+    'BS_HSITE': 0x0059d38a,
+    'BS_HDOFF': UI_HANGAR_DRAW,    # Experience UI has an eight-byte prefix adjustment
+    'BS_MESHA': 0x00513ad6,
+    'BS_POSEA': 0x00511d4b,
+    'BS_ROTYA': 0x004088a0,
+    'BS_ROTZA': 0x00408940,
+    'BS_CREATEF': 0x0365c500,
+    'BS_SEEKF': 0x0365c490,
+    'BS_READF': 0x0365c4f0,
+    'BS_CLOSEF': 0x0365c4ec,
+    'BS_ZPARTS': 0x00650358,
+    'BS_ZRINGS': 0x006503b0,
+    'BS_ZCROWN': 0x006505a0,
+    'BS_ZSIDES': 0x006505b8,
+    'BS_ROTXA': 0x00408800,
+    'BS_MSETA': 0x00513990,
+    'BS_FXA': 0x01ace5a0,
+    'BS_FX2A': 0x01acdb18,
+    'BS_NAMEA': 0x005fab78,
+    'BS_LDA': 0x004f3e4a,
+    'BS_LDXA': 0x004f3e67,
+    'BS_DRFA': 0x004f3ec5,
+    'BS_DRJA': 0x004f3f14,
+    'BS_DRSA': 0x004f3f8b,
+    'BS_C2A': 0x004f4034,
+    'BS_TIMEA': 0x01acf518,
+    'BS_PHASEA': 0x01acf48c,
+    'BS_ENDA': 0x0058f715,
+    'BS_END1A': 0x0058f764,
+    'BS_ENDEA': 0x0058f792,
+    'BS_VIEWA': 0x00408720,
+    'BS_SINA': 0x004089e0,
+    'BS_COSA': 0x00408a00,
+    'BS_YAW4': 0x00bf66e4,
+    'BS_LIVEA': 0x00512ae4,
+    'BS_READYA': 0x01ae20c4,
+    'BS_INITA': 0x0040637b,
+    'BS_FLYA': 0x00407dda,
+    'BS_FLYPA': 0x00407faa,
+    'BS_FLYEA': 0x004085c7,
+    'BS_ZMODA': 0x0364ff54,
+    'BS_ZTIMA': 0x00a01868,
+    'BS_RCOUNTA': 0x01ae0b24,
+    'BS_ARENA': 0x0345bd80,
+    'BS_ZBOXA': 0x004062bd,        # Z-Gradt's own floor query, the moon gate's box
+    'BS_FLOORA': 0x0048fdd0,       # the arena's floor, the eight's query
+    'BS_TM2': 0x00406f42,
+    'BS_TM2S': 0x0040756f,
+    'BS_TM4': 0x00406e01,
+    'BS_TM4S': 0x00406ef8,
+    'BS_CLIP0A': 0x005b5ed8,
+    'BS_CLIP3A': 0x005b5ef2,
+    'BS_CLONEA': 0x00406557,
+    'BS_CLONEFRAME': 0x44,
+    'BS_BSSA': 0x00a016b0,
+    'BS_AIDW': 0x78,
+    'BS_AI1C': 0x1c,
+    'BS_AITIMER': 0x1b8,
+    'BS_AILASER': 0x1c4,
+    'BS_AITAB': 0x1bc,
+    'BS_AITAB2': 0x1c0,
+    'BS_AITAB3': 0x4,
+    'BS_AITAB4': 0xd0,
+    'BS_TICKA': 0x005b7b71,
+    'BS_EVA': 0x03413d28,
+    'BS_ZEVA': 0x00a01784,
+    'BS_ZRA5': 0x004f42e2,
+    'BS_ZRA1': 0x004f4305,
+    'BS_ZRAX': 0x004f44c8,
+    'BS_ZGA5': 0x004f4367,
+    'BS_ZGA1': 0x004f438a,
+    'BS_ZDA5': 0x004f43d7,
+    'BS_ZDA1': 0x004f440a,
+    'BS_ZFA5': 0x004f4467,
+    'BS_ZFA1': 0x004f449a,
+    'BS_WIND1': 0x00bf7030,
+    'BS_RPITCH1': 0x00bf6fb0,
+    'BS_RYAW1': 0x00bf6fb4,
+}, art=JPRE.art, sites=None, annex=ANNEX_BLOBS,
+    own=('BOSSES',))    # the rerelease's art
 
 BUILDS = {RETAIL.md5: RETAIL, JPRE.md5: JPRE, OEM.md5: OEM,
           JP.md5: JP}
@@ -3798,6 +4679,182 @@ for _build in BUILDS.values():
 
 # SITES JPRE BEGIN
 JPRE.sites = {
+    0x000041b7: (0x00004197, '813d60d99f009a000000'),
+    0x00005775: (0x00005701, '558bec535657'),
+    0x0000593f: (0x000058cb, 'c70560d99f0000000000'),
+    0x0000594e: (0x000a421f, '558bec83ec0c535657'),
+    0x000061f4: (0x00006180, '833d60d99f00000f8df7000000'),
+    0x000062fc: (0x00006288, 'e895d1ffff'),
+    0x00006321: (0x000062ad, 'a1d4d79f00a36cfe4003'),
+    0x00006335: (0x000062c1, '833d60d99f00000f8d11060000'),
+    0x0000655f: (0x000064cf, 'e875f1ffff'),
+    0x000066c6: (0x00006636, 'e80ef0ffff'),
+    0x000068b3: (0x00006823, 'e821eeffff'),
+    0x00007928: (0x00007898, '8b450833c98a883b010000'),
+    0x00102083: (0x000fed83, 'b980010000'),
+    0x00102593: (0x000ff293, 'b980010000'),
+    0x00103357: (0x0010001f, 'b980010000'),
+    0x001033dd: (0x001000a5, 'b980010000'),
+    0x001034cd: (0x00100195, 'b980010000'),
+    0x00103553: (0x0010021b, 'b980010000'),
+    0x0010360b: (0x001002d3, 'b980010000'),
+    0x00103686: (0x0010034e, 'b980010000'),
+    0x00106baf: (0x0010339c, 'b980010000'),
+    0x00106c39: (0x00103426, 'b980010000'),
+    0x001072a8: (0x00103a5d, 'b980010000'),
+    0x001029ed: (0x000ff6ed, 'b980010000'),
+    0x000071d1: (0x00007141, '558bec83ec0c535657'),
+    0x00007ae0: (0x00007a50, '558bec535657'),
+    0x0006018b: (0x0005f1ef, 'e80d000000'),
+    0x00061070: (0x000600d4, 'a120cdad018d04408d048005786b5f00'),
+    0x0006a969: (0x000699ad, 'a1947e4503'),
+    0x000b2098: (0x000b05d8, '833d54e3ad0100'),
+    0x000b21b1: (0x000b06f1, '833d54e3ad0100'),
+    0x000b3bbe: (0x000b2036, 'ff054cdcad01'),
+    0x000b3e5b: (0x000b22d3, 'c70540dcad011c000000'),
+    0x000cc723: (0x000ca2c3, 'e83c59f9ff'),
+    0x000cfc15: (0x000cd5a6, '8305ac23bf0002'),
+    0x000cfc2f: (0x000cd5c0, '37'),
+    0x000cfc31: (0x000cd5c2, '6acc9200'),
+    0x000cfc45: (0x000cd5d6, '37'),
+    0x000cfc47: (0x000cd5d8, '6acc9200'),
+    0x000cfc53: (0x000cd5e4, '8305ac23bf000c'),
+    0x000cfcb7: (0x000cd648, '8305ac23bf0002'),
+    0x000cfcd1: (0x000cd662, '37'),
+    0x000cfcd3: (0x000cd664, '6acc9200'),
+    0x000cfce7: (0x000cd678, '37'),
+    0x000cfce9: (0x000cd67a, '6acc9200'),
+    0x000cfcf5: (0x000cd686, '8305ac23bf000c'),
+    0x000d087f: (0x000ce210, '8d044556ddcb01'),
+    0x000d08d7: (0x000ce268, '8d04455eddcb01'),
+    0x000d094d: (0x000ce2e2, '8d0445a2c5cb01'),
+    0x000d09b0: (0x000ce349, '8d0445aac5cb01'),
+    0x000d3991: (0x000d11b6, 'c745f81f000000'),
+    0x000d39d5: (0x000d11fa, 'c745f81f000000'),
+    0x000db986: (0x000d8ab0, 'e8dbeff2ff'),
+    0x000f29a5: (0x000ef9f5, '86000000'),
+    0x000f39b5: (0x000f0a05, 'a194b9ad01'),
+    0x000f3a2b: (0x000f0a7b, '837dfc000f844f000000'),
+    0x000f3b9f: (0x000f0bef, 'a194b9ad01'),
+    0x000f3e48: (0x000f0e98, '837dfc000f8423000000'),
+    0x000f3ecd: (0x000f0f1d, '837dfc000f8423000000'),
+    0x000f3f3d: (0x000f0f8d, '837dfc000f8433000000'),
+    0x000f3fcd: (0x000f101d, '837dfc000f8433000000'),
+    0x0010325f: (0x000fff27, 'e8647bf0ff'),
+    0x0010d6d4: (0x00109e54, '99f7f96689157ec06403'),
+    0x0010d7b5: (0x00109f35, '99f7f96689157ec06403'),
+    0x0010e939: (0x0010b09d, 'd91d6c31bf00'),
+    0x0010ede5: (0x0010b4f5, 'd91d6c31bf00'),
+    0x0010f06d: (0x0010b745, 'd91d6c31bf00'),
+    0x0010f32a: (0x0010b9ca, 'd91d6c31bf00'),
+    0x0010f8a1: (0x0010bf09, 'c7056c31bf0000000c42'),
+    0x0010f8b0: (0x0010bf18, 'c7056c31bf000000f041'),
+    0x0010fb12: (0x0010c15e, 'd91d6c31bf00'),
+    0x0010fbf7: (0x0010c243, 'd91d6c31bf00'),
+    0x0010fcf6: (0x0010c326, 'd91d6c31bf00'),
+    0x0010fedc: (0x0010c4b8, 'd91d6c31bf00'),
+    0x00110109: (0x0010c691, 'd91d6c31bf00'),
+    0x0011297d: (0x0010ef6d, '8b45f80fbf401e'),
+    0x001129f8: (0x0010efe8, '8b45f8d84840'),
+    0x00112a2c: (0x0010f01c, '8b45f8d84840'),
+    0x00112a60: (0x0010f050, '8b45f8d84840'),
+    0x001802cb: (0x0017b4b9, 'e87d13f9ff'),
+    0x00189e7e: (0x00185256, '8b45f005e0050000'),
+    0x0018a4fd: (0x0018582d, 'e85e22e8ff'),
+    0x0018fc68: (0x0018acbc, '833d8cb6ac01000f854f000000'),
+    0x0018fcba: (0x0018ad0e, 'e8e9bbffff'),
+    0x0018fd0f: (0x0018ad63, 'c70540dcad0116000000'),
+    0x0019bf93: (0x00196d93, '558bec83ec30'),
+    0x0019bff7: (0x00196df7, '90c46100'),
+    0x0019c2e7: (0x001970e7, 'f0ca6100'),
+    0x0019c6ab: (0x001974ab, '30cb6100'),
+    0x0019c850: (0x00197650, 'f0ca6100'),
+    0x0019c973: (0x00197773, 'f0ca6100'),
+    0x0019caaa: (0x001978aa, 'f0ca6100'),
+    0x0019cbf3: (0x001979f3, 'f0ca6100'),
+    0x0019cd94: (0x00197b94, 'e80d83f7ff'),
+    0x0019cfeb: (0x00197deb, 'a120cdad01'),
+    0x0019d413: (0x00198213, 'a120b7ac01'),
+    0x0019d80b: (0x0019860b, 'dc0580cd6100'),
+    0x0019d8e5: (0x001986e5, 'f8c56100'),
+    0x0019db28: (0x00198928, 'd91c85845d4503'),
+    0x0019db81: (0x00198981, 'd91c85845d4503'),
+    0x0019dc03: (0x00198a03, 'f8c56100'),
+    0x0019dd4a: (0x00198b4a, 'f8c56100'),
+    0x0019df8a: (0x00198d8a, 'f8c56100'),
+    0x0019e0c2: (0x00198e92, 'd91c85845d4503'),
+    0x0019e0f9: (0x00198ec9, 'd91c85845d4503'),
+    0x0019e209: (0x00198fd9, 'f8c56100'),
+    0x0019e241: (0x00199011, '3b048d505d4503'),
+    0x0019e3f8: (0x001991c8, '00c66100'),
+    0x0019e590: (0x00199360, '00c66100'),
+    0x0019e728: (0x001994f8, '00c66100'),
+    0x0019e8cf: (0x0019969f, '00c66100'),
+    0x0019eae2: (0x001998b2, '00c66100'),
+    0x0019ec20: (0x001999f0, '833c857c69450300'),
+    0x0019f30f: (0x0019a0a7, 'e804cbffff'),
+    0x0019f317: (0x0019a0af, 'b8eb040000'),
+    0x0019f476: (0x0019a20e, '833c85b869450307'),
+    0x0019f48f: (0x0019a227, 'ff0485b8694503'),
+    0x0019f3e9: (0x0019a181, 'ff0c85b8694503'),
+    0x001a0a6b: (0x0019b803, 'ff0485b8694503'),
+    0x001a09c5: (0x0019b75d, 'ff0c85b8694503'),
+    0x0019f4cc: (0x0019a264, '833d70a76b0000'),
+    0x0019f6a5: (0x0019a43d, '00c66100'),
+    0x0019f6f4: (0x0019a48c, 'dc2590cd6100'),
+    0x0019f71e: (0x0019a4b6, 'dc2590cd6100'),
+    0x0019f780: (0x0019a518, 'dc0590cd6100'),
+    0x0019f7aa: (0x0019a542, 'dc0590cd6100'),
+    0x0019f8bd: (0x0019a655, '00c66100'),
+    0x0019f8c1: (0x0019a659, 'a320cdad01a120cdad01'),
+    0x0019f8ec: (0x0019a684, '00c66100'),
+    0x0019f91f: (0x0019a6b7, '00c66100'),
+    0x0019f9be: (0x0019a756, '837dac0a0f8d17000000'),
+    0x0019fc26: (0x0019a9be, '83e007'),
+    0x0019fc2c: (0x0019a9c4, '00c66100'),
+    0x0019fc3d: (0x0019a9d5, 'f8cb6100'),
+    0x0019fc64: (0x0019a9fc, 'f4cb6100'),
+    0x0019fc97: (0x0019aa2f, 'f8cb6100'),
+    0x0019fccb: (0x0019aa63, 'f0cb6100'),
+    0x001a08eb: (0x0019b683, 'e886feffff'),
+    0x001a08f3: (0x0019b68b, 'b8eb040000'),
+    0x001a0a52: (0x0019b7ea, '833c85b869450307'),
+    0x001a0aa8: (0x0019b840, '833d70a76b0000'),
+    0x001a0c81: (0x0019ba19, '00c66100'),
+    0x001a0e80: (0x0019bc18, '00c66100'),
+    0x001a0e84: (0x0019bc1c, 'a320cdad01a120cdad01'),
+    0x001a0eaf: (0x0019bc47, '00c66100'),
+    0x001a0ee2: (0x0019bc7a, '00c66100'),
+    0x001a0f81: (0x0019bd19, '837dac0a0f8d17000000'),
+    0x001a171d: (0x0019c4b5, 'c7056869450340c66100'),
+    0x001a1764: (0x0019c4fc, 'e8afa6ffff'),
+    0x001a17ec: (0x0019c584, '8b048520c66100'),
+    0x001a18a5: (0x0019c63d, '8b0485b8694503'),
+    0x001a18fb: (0x0019c693, 'e8a301f7ff'),
+    0x001b642c: (0x001b0e94, '0fbf403085c00f851a000000'),
+    0x001b7f80: (0x001b2958, 'e83d49ebff'),
+    0x001b80c8: (0x001b2aa0, '558bec83ec04535657'),
+    0x001b82b8: (0x001b2c90, 'e86c2ae5ff'),
+    0x001b830d: (0x001b2ce5, 'e8172ae5ff'),
+    0x001beb70: (0x001b9510, 'e82633f5ff'),
+    0x001c1622: (0x001bbeb6, 'e83519edff'),
+    0x001c5b79: (0x001c0448, 'e8b3fdffff'),
+    0x001c5bbb: (0x001c048a, 'e871fdffff'),
+    0x001d39b1: (0x001ce241, '8b3594726d00'),
+    0x001d4704: (0x001cef94, '8b3594726d00'),
+    0x001d4ebb: (0x001cf74b, 'a380447000'),
+    0x0015c93e: (0x00157e12, '6800d87800'),
+    0x0015cb77: (0x0015802f, '6800d87800'),
+    0x0015cdb0: (0x0015824c, '6800d87800'),
+    0x0015ce2b: (0x001582c7, '5f5e5bc9c3'),
+    0x001de8c1: (0x001d9151, '8b3594726d00'),
+    0x001df654: (0x001d9ee4, '8b3594726d00'),
+    0x001fe638: (0x001f8e40, '6ff94500'),
+    0x0023b5d4: (0x00235b5c, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000'),
+    0x0023bca4: (0x0023622c, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000'),
+    0x0023cdb4: (0x0023733c, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000'),
+    0x0023d484: (0x00237a0c, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000'),
+    0x002bb008: (0x002b6168, '5a2d475241542020202020004a41474152414e4449202000'),
     0x002bba60: (0x002b6bc0, '0f'),
     0x00189546: (0x0018491a, '2256'),
     0x00189552: (0x00184926, '88580100'),
@@ -4112,6 +5169,33 @@ JPRE.sites = {
 
 # SITES OEM BEGIN
 OEM.sites = {
+    0x0000655f: (0x0000655f, 'e859f1ffff'),
+    0x000066c6: (0x000066c6, 'e8f2efffff'),
+    0x000068b3: (0x000068b3, 'e805eeffff'),
+    0x00007928: (0x00007928, '8b450833c98a883b010000'),
+    0x00102083: (0x00101f23, 'b980010000'),
+    0x00102593: (0x00102433, 'b980010000'),
+    0x00103357: (0x001031f7, 'b980010000'),
+    0x001033dd: (0x0010327d, 'b980010000'),
+    0x001034cd: (0x0010336d, 'b980010000'),
+    0x00103553: (0x001033f3, 'b980010000'),
+    0x0010360b: (0x001034ab, 'b980010000'),
+    0x00103686: (0x00103526, 'b980010000'),
+    0x00106baf: (0x00106a4f, 'b980010000'),
+    0x00106c39: (0x00106ad9, 'b980010000'),
+    0x001072a8: (0x00107148, 'b980010000'),
+    0x001029ed: (0x0010288d, 'b980010000'),
+    0x000d3991: (0x000d3830, 'c745f81f000000'),
+    0x000d39d5: (0x000d3874, 'c745f81f000000'),
+    0x001129f8: (0x00112568, '8b45fcd84840'),
+    0x00112a2c: (0x0011259c, '8b45fcd84840'),
+    0x00112a60: (0x001125d0, '8b45fcd84840'),
+    0x0019f9be: (0x0019f48e, '837dac0a0f8d17000000'),
+    0x001a08eb: (0x001a03bb, 'e886feffff'),
+    0x001a0a52: (0x001a0522, '833c85f8bc450307'),
+    0x001a0aa8: (0x001a0578, '833df0e96b0000'),
+    0x001a0f81: (0x001a0a51, '837dac0a0f8d17000000'),
+    0x002bb008: (0x002ba9a0, '5a2d475241542020202020004a41474152414e4449202000'),
     0x002bba60: (0x002bb3f8, '0f'),
     0x00189546: (0x00189016, '2256'),
     0x00189552: (0x00189022, '88580100'),
@@ -4394,11 +5478,338 @@ OEM.sites = {
     0x001dd67a: (0x001dd1ba, 'd83dd8877000'),
     0x001df7a0: (0x001df2e0, '558bec50535152'),
     0x001e1e80: (0x001e19c0, '558bec50535152'),
+    # bosses
+    0x001c5b79: (0x001c5692, 'e8b3fdffff'),
+    0x001c5bbb: (0x001c56d4, 'e871fdffff'),
+    0x0019f8c1: (0x0019f391, 'a3c80bae01a1c80bae01'),
+    0x001a0e84: (0x001a0954, 'a3c80bae01a1c80bae01'),
+    0x000f29a5: (0x000f2845, '86000000'),
+    0x000f39b5: (0x000f3855, 'a1340cae01'),
+    0x000f3a2b: (0x000f38cb, '837df4000f844f000000'),
+    0x000f3b9f: (0x000f3a3f, 'a1340cae01'),
+    0x0018fc68: (0x0018f738, '833dfc08ad01000f854f000000'),
+    0x0010325f: (0x001030ff, 'e81c4af0ff'),
+    0x000db986: (0x000db826, 'e8f5c2f2ff'),
+    0x0011297d: (0x001124ed, '8b45fc0fbf401e'),
+    0x00005775: (0x00005775, '558bec535657'),
+    0x000071d1: (0x000071d1, '558bec83ec0c535657'),
+    0x00006335: (0x00006335, '833dd82ca000000f8d2d060000'),
+    0x000061f4: (0x000061f4, '833dd82ca000000f8df7000000'),
+    0x001b642c: (0x001b5efc, '0fbf403085c00f851a000000'),
+    0x0000594e: (0x0000594e, '558bec83ec44535657'),
+    0x001b80c8: (0x001b7b98, '558bec83ec04535657'),
+    0x00006321: (0x00006321, 'a1f42ba000a398514103'),
+    0x000f3e48: (0x000f3ce8, '837df4000f8423000000'),
+    0x000f3ecd: (0x000f3d6d, '837df4000f8423000000'),
+    0x000f3f3d: (0x000f3ddd, '837df4000f8433000000'),
+    0x000f3fcd: (0x000f3e6d, '837df4000f8433000000'),
+    0x0010e939: (0x0010e4a9, 'd91da084bf00'),
+    0x0010ede5: (0x0010e955, 'd91da084bf00'),
+    0x0010f06d: (0x0010ebdd, 'd91da084bf00'),
+    0x0010f32a: (0x0010ee9a, 'd91da084bf00'),
+    0x0010fb12: (0x0010f682, 'd91da084bf00'),
+    0x0010fbf7: (0x0010f767, 'd91da084bf00'),
+    0x0010fcf6: (0x0010f866, 'd91da084bf00'),
+    0x0010fedc: (0x0010fa4c, 'd91da084bf00'),
+    0x00110109: (0x0010fc79, 'd91da084bf00'),
+    0x0010f8a1: (0x0010f411, 'c705a084bf0000000c42'),
+    0x0010f8b0: (0x0010f420, 'c705a084bf000000f041'),
+    0x00061070: (0x00060fd0, 'a1c80bae018d04408d04800578bb5f00'),
+    0x0006018b: (0x000600eb, 'e80d000000'),
+    0x00007ae0: (0x00007ae0, '558bec535657'),
+    0x0006a969: (0x0006a869, 'a1e4d14503'),
+    0x000041b7: (0x000041b7, '813dd82ca0009a000000'),
+    0x0018a4fd: (0x00189fcd, 'e84edbe7ff'),
+    0x0018fcba: (0x0018f78a, 'e80db9ffff'),
+    0x001b82b8: (0x001b7d88, 'e8e8d9e4ff'),
+    0x001b830d: (0x001b7ddd, 'e893d9e4ff'),
+    0x00189e7e: (0x0018994e, '8b45f00500060000'),
+    0x000062fc: (0x000062fc, 'e841d1ffff'),
+    0x001c1622: (0x001c10f2, 'e8f9d9ecff'),
+    0x001b7f80: (0x001b7a50, 'e80107ebff'),
+
+    0x001a171d: (0x001a11ed, 'c70518b24503a8186200'),
+    0x0019f476: (0x0019ef46, '833c85f8bc450307'),
+    0x0019f48f: (0x0019ef5f, 'ff0485f8bc4503'),
+    0x0019f3e9: (0x0019eeb9, 'ff0c85f8bc4503'),
+    0x001a0a6b: (0x001a053b, 'ff0485f8bc4503'),
+    0x001a09c5: (0x001a0495, 'ff0c85f8bc4503'),
+    0x001a17ec: (0x001a12bc, '8b048588186200'),
+    0x0019f4cc: (0x0019ef9c, '833df0e96b0000'),
+    0x0019bf93: (0x0019ba63, '558bec83ec30'),
+    0x0019f30f: (0x0019eddf, 'e89ccaffff'),
+    0x001a1764: (0x001a1234, 'e847a6ffff'),
+    0x0019d8e5: (0x0019d3b5, '60186200'),
+    0x0019dc03: (0x0019d6d3, '60186200'),
+    0x0019dd4a: (0x0019d81a, '60186200'),
+    0x0019df8a: (0x0019da5a, '60186200'),
+    0x0019e209: (0x0019dcd9, '60186200'),
+    0x0019e3f8: (0x0019dec8, '68186200'),
+    0x0019e590: (0x0019e060, '68186200'),
+    0x0019e728: (0x0019e1f8, '68186200'),
+    0x0019e8cf: (0x0019e39f, '68186200'),
+    0x0019eae2: (0x0019e5b2, '68186200'),
+    0x0019f6a5: (0x0019f175, '68186200'),
+    0x0019f8bd: (0x0019f38d, '68186200'),
+    0x0019f8ec: (0x0019f3bc, '68186200'),
+    0x0019f91f: (0x0019f3ef, '68186200'),
+    0x0019fc2c: (0x0019f6fc, '68186200'),
+    0x001a0c81: (0x001a0751, '68186200'),
+    0x001a0e80: (0x001a0950, '68186200'),
+    0x001a0eaf: (0x001a097f, '68186200'),
+    0x001a0ee2: (0x001a09b2, '68186200'),
+    0x000cfc2f: (0x000cfacf, '37'),
+    0x000cfc31: (0x000cfad1, '7a109300'),
+    0x000cfc45: (0x000cfae5, '37'),
+    0x000cfc47: (0x000cfae7, '7a109300'),
+    0x000cfcd1: (0x000cfb71, '37'),
+    0x000cfcd3: (0x000cfb73, '7a109300'),
+    0x000cfce7: (0x000cfb87, '37'),
+    0x000cfce9: (0x000cfb89, '7a109300'),
+    0x000cfc15: (0x000cfab5, '83051877bf0002'),
+    0x000cfcb7: (0x000cfb57, '83051877bf0002'),
+    0x000cfc53: (0x000cfaf3, '83051877bf000c'),
+    0x000cfcf5: (0x000cfb95, '83051877bf000c'),
+    0x000d087f: (0x000d071f, '8d04453630cc01'),
+    0x000d08d7: (0x000d0777, '8d04453e30cc01'),
+    0x000d094d: (0x000d07ed, '8d04458218cc01'),
+    0x000d09b0: (0x000d0850, '8d04458a18cc01'),
+    0x0019bff7: (0x0019bac7, 'f8166200'),
+    0x0019f6f4: (0x0019f1c4, 'dc25f81f6200'),
+    0x0019f71e: (0x0019f1ee, 'dc25f81f6200'),
+    0x0019f780: (0x0019f250, 'dc05f81f6200'),
+    0x0019f7aa: (0x0019f27a, 'dc05f81f6200'),
+    0x0019cd94: (0x0019c864, 'e87d6cf7ff'),
+    0x0019c2e7: (0x0019bdb7, '581d6200'),
+    0x0019c850: (0x0019c320, '581d6200'),
+    0x0019c973: (0x0019c443, '581d6200'),
+    0x0019caaa: (0x0019c57a, '581d6200'),
+    0x0019cbf3: (0x0019c6c3, '581d6200'),
+    0x0019c6ab: (0x0019c17b, '981d6200'),
+    0x0019fc26: (0x0019f6f6, '83e007'),
+    0x0019fc3d: (0x0019f70d, '601e6200'),
+    0x0019fc64: (0x0019f722, '5c1e6200'),
+    0x0019fc97: (0x0019f754, '601e6200'),
+    0x0019fccb: (0x0019f789, '581e6200'),
+    0x0019cfeb: (0x0019cabb, 'a1c80bae01'),
+    0x001a18a5: (0x001a1375, '8b0485f8bc4503'),
+    0x0019d80b: (0x0019d2db, 'dc05e81f6200'),
+    0x0019ec20: (0x0019e6f0, '833c85bcbc450300'),
+    0x0019d413: (0x0019cee3, 'a1100aad01'),
+    0x0019e241: (0x0019dd11, '3b048d20b24503'),
+    0x000b2098: (0x000b1f38, '833d941fae0100'),
+    0x0000593f: (0x0000593f, 'c705d82ca00000000000'),
+    0x000b21b1: (0x000b2051, '833d941fae0100'),
+    0x001d39b1: (0x001d34f1, '8b35c4b46d00'),
+    0x001d4704: (0x001d4244, '8b35c4b46d00'),
+    0x001d4ebb: (0x001d49fb, 'a3b0867000'),
+    0x0015c93e: (0x0015c4ae, '68301a7900'),
+    0x0015cb77: (0x0015c6e7, '68301a7900'),
+    0x0015cdb0: (0x0015c920, '68301a7900'),
+    0x0015ce2b: (0x0015c99b, '5f5e5bc9c3'),
+    0x001de8c1: (0x001de401, '8b35c4b46d00'),
+    0x001df654: (0x001df194, '8b35c4b46d00'),
+    0x001beb70: (0x001be640, 'e8f617f5ff'),
+    0x001802cb: (0x0017fd9b, 'e89b00f9ff'),
+    0x001a18fb: (0x001a13cb, 'e86beaf6ff'),
+    0x0019f317: (0x0019ede7, 'b8eb040000'),
+    0x001a08f3: (0x001a03c3, 'b8eb040000'),
+    0x000b3bbe: (0x000b3a5e, 'ff05c034ae01'),
+    0x000b3e5b: (0x000b3d00, 'c7052036ae011c000000'),
+    0x0018fd0f: (0x0018f7df, 'c7052036ae0116000000'),
+    0x000cc723: (0x000cc5c3, 'e83845f9ff'),
+    0x001fe638: (0x001fe028, '4f084600'),
+    0x0010d6d4: (0x0010d244, '99f7f9668915ba136503'),
+    0x0010d7b5: (0x0010d325, '99f7f9668915ba136503'),
+    0x0023b5d4: (0x0023afc4, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000'),
+    0x0023bca4: (0x0023b694, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000'),
+    0x0023cdb4: (0x0023c7a4, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000'),
+    0x0023d484: (0x0023ce74, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000'),
+    0x0019db28: (0x0019d5f8, 'd91c8554b24503'),
+    0x0019db81: (0x0019d651, 'd91c8554b24503'),
+    0x0019e0c2: (0x0019db92, 'd91c8554b24503'),
+    0x0019e0f9: (0x0019dbc9, 'd91c8554b24503'),
 }
 # SITES OEM END
 
 # SITES JP BEGIN
 JP.sites = {
+    0x000041b7: (0x000041b7, '813d6818a0009a000000'),
+    0x00005775: (0x00005775, '558bec535657'),
+    0x0000593f: (0x0000593f, 'c7056818a00000000000'),
+    0x0000594e: (0x0000594e, '558bec83ec44535657'),
+    0x000061f4: (0x000061f4, '833d6818a000000f8df7000000'),
+    0x000062fc: (0x000062fc, 'e841d1ffff'),
+    0x00006321: (0x00006321, 'a18417a000a3283d4103'),
+    0x00006335: (0x00006335, '833d6818a000000f8d2d060000'),
+    0x0000655f: (0x0000655f, 'e859f1ffff'),
+    0x000066c6: (0x000066c6, 'e8f2efffff'),
+    0x000068b3: (0x000068b3, 'e805eeffff'),
+    0x00007928: (0x00007928, '8b450833c98a883b010000'),
+    0x00102083: (0x00101913, 'b980010000'),
+    0x00102593: (0x00101e23, 'b980010000'),
+    0x00103357: (0x00102be7, 'b980010000'),
+    0x001033dd: (0x00102c6d, 'b980010000'),
+    0x001034cd: (0x00102d5d, 'b980010000'),
+    0x00103553: (0x00102de3, 'b980010000'),
+    0x0010360b: (0x00102e9b, 'b980010000'),
+    0x00103686: (0x00102f16, 'b980010000'),
+    0x00106baf: (0x0010643f, 'b980010000'),
+    0x00106c39: (0x001064c9, 'b980010000'),
+    0x001072a8: (0x00106b38, 'b980010000'),
+    0x001029ed: (0x0010227d, 'b980010000'),
+    0x000071d1: (0x000071d1, '558bec83ec0c535657'),
+    0x00007ae0: (0x00007ae0, '558bec535657'),
+    0x0006018b: (0x000600eb, 'e80d000000'),
+    0x00061070: (0x00060fd0, 'a158f7ad018d04408d04800578ab5f00'),
+    0x0006a969: (0x0006a869, 'a174bd4503'),
+    0x000b2098: (0x000b2038, '833d240bae0100'),
+    0x000b21b1: (0x000b2151, '833d240bae0100'),
+    0x000b3bbe: (0x000b3b5e, 'ff055020ae01'),
+    0x000b3e5b: (0x000b3e00, 'c705b021ae011c000000'),
+    0x000cc723: (0x000cc6a3, 'e85844f9ff'),
+    0x000cfc15: (0x000cf99c, '8305a862bf0002'),
+    0x000cfc2f: (0x000cf9b6, '37'),
+    0x000cfc31: (0x000cf9b8, '0afc9200'),
+    0x000cfc45: (0x000cf9cc, '37'),
+    0x000cfc47: (0x000cf9ce, '0afc9200'),
+    0x000cfc53: (0x000cf9da, '8305a862bf000c'),
+    0x000cfcb7: (0x000cfa3e, '8305a862bf0002'),
+    0x000cfcd1: (0x000cfa58, '37'),
+    0x000cfcd3: (0x000cfa5a, '0afc9200'),
+    0x000cfce7: (0x000cfa6e, '37'),
+    0x000cfce9: (0x000cfa70, '0afc9200'),
+    0x000cfcf5: (0x000cfa7c, '8305a862bf000c'),
+    0x000d087f: (0x000d0606, '8d0445c61bcc01'),
+    0x000d08d7: (0x000d065e, '8d0445ce1bcc01'),
+    0x000d094d: (0x000d06d8, '8d04451204cc01'),
+    0x000d09b0: (0x000d073f, '8d04451a04cc01'),
+    0x000d3991: (0x000d35ab, 'c745f81f000000'),
+    0x000d39d5: (0x000d35ef, 'c745f81f000000'),
+    0x000db986: (0x000db216, 'e805c9f2ff'),
+    0x000f29a5: (0x000f2235, '86000000'),
+    0x000f39b5: (0x000f3245, 'a1c4f7ad01'),
+    0x000f3a2b: (0x000f32bb, '837df4000f844f000000'),
+    0x000f3b9f: (0x000f342f, 'a1c4f7ad01'),
+    0x000f3e48: (0x000f36d8, '837df4000f8423000000'),
+    0x000f3ecd: (0x000f375d, '837df4000f8423000000'),
+    0x000f3f3d: (0x000f37cd, '837df4000f8433000000'),
+    0x000f3fcd: (0x000f385d, '837df4000f8433000000'),
+    0x0010325f: (0x00102aef, 'e82c50f0ff'),
+    0x0010d6d4: (0x0010cc34, '99f7f96689154aff6403'),
+    0x0010d7b5: (0x0010cd15, '99f7f96689154aff6403'),
+    0x0010e939: (0x0010de99, 'd91d3070bf00'),
+    0x0010ede5: (0x0010e345, 'd91d3070bf00'),
+    0x0010f06d: (0x0010e5cd, 'd91d3070bf00'),
+    0x0010f32a: (0x0010e88a, 'd91d3070bf00'),
+    0x0010f8a1: (0x0010ee01, 'c7053070bf0000000c42'),
+    0x0010f8b0: (0x0010ee10, 'c7053070bf000000f041'),
+    0x0010fb12: (0x0010f072, 'd91d3070bf00'),
+    0x0010fbf7: (0x0010f157, 'd91d3070bf00'),
+    0x0010fcf6: (0x0010f256, 'd91d3070bf00'),
+    0x0010fedc: (0x0010f43c, 'd91d3070bf00'),
+    0x00110109: (0x0010f669, 'd91d3070bf00'),
+    0x0011297d: (0x00111edd, '8b45fc0fbf401e'),
+    0x001129f8: (0x00111f58, '8b45fcd84840'),
+    0x00112a2c: (0x00111f8c, '8b45fcd84840'),
+    0x00112a60: (0x00111fc0, '8b45fcd84840'),
+    0x001802cb: (0x0017f189, 'e89d06f9ff'),
+    0x00189e7e: (0x00188d1e, '8b45f00500060000'),
+    0x0018a4fd: (0x0018939d, 'e87ee7e7ff'),
+    0x0018fc68: (0x0018eb08, '833d8cf4ac01000f854f000000'),
+    0x0018fcba: (0x0018eb5a, 'e80db9ffff'),
+    0x0018fd0f: (0x0018ebaf, 'c705b021ae0116000000'),
+    0x0019bf93: (0x0019ae33, '558bec83ec30'),
+    0x0019bff7: (0x0019ae97, '80046200'),
+    0x0019c2e7: (0x0019b187, 'e00a6200'),
+    0x0019c6ab: (0x0019b54b, '200b6200'),
+    0x0019c850: (0x0019b6f0, 'e00a6200'),
+    0x0019c973: (0x0019b813, 'e00a6200'),
+    0x0019caaa: (0x0019b94a, 'e00a6200'),
+    0x0019cbf3: (0x0019ba93, 'e00a6200'),
+    0x0019cd94: (0x0019bc34, 'e89d72f7ff'),
+    0x0019cfeb: (0x0019be8b, 'a158f7ad01'),
+    0x0019d413: (0x0019c2b3, 'a1a0f5ac01'),
+    0x0019d80b: (0x0019c6ab, 'dc05700d6200'),
+    0x0019d8e5: (0x0019c785, 'e8056200'),
+    0x0019db28: (0x0019c9c8, 'd91c85e49d4503'),
+    0x0019db81: (0x0019ca21, 'd91c85e49d4503'),
+    0x0019dc03: (0x0019caa3, 'e8056200'),
+    0x0019dd4a: (0x0019cbea, 'e8056200'),
+    0x0019df8a: (0x0019ce2a, 'e8056200'),
+    0x0019e0c2: (0x0019cf62, 'd91c85e49d4503'),
+    0x0019e0f9: (0x0019cf99, 'd91c85e49d4503'),
+    0x0019e209: (0x0019d0a9, 'e8056200'),
+    0x0019e241: (0x0019d0e1, '3b048db09d4503'),
+    0x0019e3f8: (0x0019d298, 'f0056200'),
+    0x0019e590: (0x0019d430, 'f0056200'),
+    0x0019e728: (0x0019d5c8, 'f0056200'),
+    0x0019e8cf: (0x0019d76f, 'f0056200'),
+    0x0019eae2: (0x0019d982, 'f0056200'),
+    0x0019ec20: (0x0019dac0, '833c854ca8450300'),
+    0x0019f30f: (0x0019e1af, 'e89ccaffff'),
+    0x0019f317: (0x0019e1b7, 'b8eb040000'),
+    0x0019f476: (0x0019e316, '833c8588a8450307'),
+    0x0019f48f: (0x0019e32f, 'ff048588a84503'),
+    0x0019f3e9: (0x0019e289, 'ff0c8588a84503'),
+    0x001a0a6b: (0x0019f90b, 'ff048588a84503'),
+    0x001a09c5: (0x0019f865, 'ff0c8588a84503'),
+    0x0019f4cc: (0x0019e36c, '833d50d76b0000'),
+    0x0019f6a5: (0x0019e545, 'f0056200'),
+    0x0019f6f4: (0x0019e594, 'dc25800d6200'),
+    0x0019f71e: (0x0019e5be, 'dc25800d6200'),
+    0x0019f780: (0x0019e620, 'dc05800d6200'),
+    0x0019f7aa: (0x0019e64a, 'dc05800d6200'),
+    0x0019f8bd: (0x0019e75d, 'f0056200'),
+    0x0019f8c1: (0x0019e761, 'a358f7ad01a158f7ad01'),
+    0x0019f8ec: (0x0019e78c, 'f0056200'),
+    0x0019f91f: (0x0019e7bf, 'f0056200'),
+    0x0019f9be: (0x0019e85e, '837dac0a0f8d17000000'),
+    0x0019fc26: (0x0019eac6, '83e007'),
+    0x0019fc2c: (0x0019eacc, 'f0056200'),
+    0x0019fc3d: (0x0019eadd, 'e80b6200'),
+    0x0019fc64: (0x0019eaf2, 'e40b6200'),
+    0x0019fc97: (0x0019eb24, 'e80b6200'),
+    0x0019fccb: (0x0019eb59, 'e00b6200'),
+    0x001a08eb: (0x0019f78b, 'e886feffff'),
+    0x001a08f3: (0x0019f793, 'b8eb040000'),
+    0x001a0a52: (0x0019f8f2, '833c8588a8450307'),
+    0x001a0aa8: (0x0019f948, '833d50d76b0000'),
+    0x001a0c81: (0x0019fb21, 'f0056200'),
+    0x001a0e80: (0x0019fd20, 'f0056200'),
+    0x001a0e84: (0x0019fd24, 'a358f7ad01a158f7ad01'),
+    0x001a0eaf: (0x0019fd4f, 'f0056200'),
+    0x001a0ee2: (0x0019fd82, 'f0056200'),
+    0x001a0f81: (0x0019fe21, '837dac0a0f8d17000000'),
+    0x001a171d: (0x001a05bd, 'c705a89d450330066200'),
+    0x001a1764: (0x001a0604, 'e847a6ffff'),
+    0x001a17ec: (0x001a068c, '8b048510066200'),
+    0x001a18a5: (0x001a0745, '8b048588a84503'),
+    0x001a18fb: (0x001a079b, 'e88bf0f6ff'),
+    0x001b642c: (0x001b52cc, '0fbf403085c00f851a000000'),
+    0x001b7f80: (0x001b6e20, 'e83113ebff'),
+    0x001b80c8: (0x001b6f68, '558bec83ec04535657'),
+    0x001b82b8: (0x001b7158, 'e818e6e4ff'),
+    0x001b830d: (0x001b71ad, 'e8c3e5e4ff'),
+    0x001beb70: (0x001bda10, 'e8161ef5ff'),
+    0x001c1622: (0x001c04c2, 'e829e7ecff'),
+    0x001c5b79: (0x001c4a62, 'e8b3fdffff'),
+    0x001c5bbb: (0x001c4aa4, 'e871fdffff'),
+    0x001d39b1: (0x001d2891, '8b3534a26d00'),
+    0x001d4704: (0x001d35e4, '8b3534a26d00'),
+    0x001d4ebb: (0x001d3d9b, 'a320747000'),
+    0x0015c93e: (0x0015b79e, '68a0077900'),
+    0x0015cb77: (0x0015b9d7, '68a0077900'),
+    0x0015cdb0: (0x0015bc10, '68a0077900'),
+    0x0015ce2b: (0x0015bc8b, '5f5e5bc9c3'),
+    0x001de8c1: (0x001dd7a1, '8b3534a26d00'),
+    0x001df654: (0x001de534, '8b3534a26d00'),
+    0x001fe638: (0x001fd430, '4f084600'),
+    0x0023b5d4: (0x0023a14c, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000'),
+    0x0023bca4: (0x0023a81c, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000'),
+    0x0023cdb4: (0x0023b92c, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000'),
+    0x0023d484: (0x0023bffc, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000'),
+    0x002bb008: (0x002b9900, '5a2d475241542020202020004a41474152414e4449202000'),
     0x002bba60: (0x002ba358, '0f'),
     0x00189546: (0x001883e6, '2256'),
     0x00189552: (0x001883f2, '88580100'),
@@ -5796,6 +7207,10552 @@ BLOBS = {
         'flag_a': 0xaa,
         'flag_b': 0xae,
     }),
+    'BOSSES': (bytes.fromhex(
+        '60e8f61c0000e8681e0000e81e160000e8160d0000c705003b00000000000031'
+        'd20fb7050000000083f820720683f8307301428b0d783b00008915783b000085'
+        'c9740b85d2756be8600d0000eb6485d27460e896140000c7057c3b0000000000'
+        '00c705503c000000000000c705583c000000000000c705543c000000000000c7'
+        '05cc3a000000000000c705b641000000000000c605783a000000e88629000083'
+        '3d0000000007760ac70500000000000000000fb7050000000083e81083f81073'
+        '13833d0000000004770ac7057c3b000000000000833d00000000007509c605be'
+        '41000000eb52803dbe410000007549a16400000083f808740e83f809753a833d'
+        '000000005a7231c605be41000001be00000000bf74c00200b980010000fcf3a5'
+        '565751be00000000bf74c60200b900000000fcf3a5595f5e833d000000000075'
+        '0e85d2740ae8650b0000e88108000061e9fcffffffb900000000833d00000000'
+        '007405b900000000ba00000000c7057c3b000000000000833d00000000007524'
+        '83f808721f890d883b00005052e8f40e0000a3803b00008915843b00005a58a3'
+        '7c3b00008902c360803d7c400000000f852e010000be00000000bf64350200b9'
+        '78000000fcf3a5beb0010000bf44370200b90c000000fcf3a5beb0010000bf74'
+        '370200b90c000000fcf3a5bee0010000bfa4370200b9a8000000fcf3a5bb4437'
+        '0200c7431010000000d9431cd8058c3b0000d9531cd8059c3b0000d95b4cd943'
+        '48d805a03b0000d95b48c7434012000000be00000000bf6c320200b930000000'
+        'fcf3a5be50000000bf34330200b904000000fcf3a5be00000000bf5c330200b9'
+        '08000000fcf3a5be00000000bffc330200b908000000fcf3a5b8ffffffffa37c'
+        '330200a380330200a31c340200a320340200be00000000bf84330200b9180000'
+        '00fcf3a5be64400000bfe4330200b903000000fcf3a5be64400000bff0330200'
+        'b903000000fcf3a5a120000000a32c330200a11c000000a330330200c6057c40'
+        '000001b800000000c7056832020000000000833d0000000000750fb864350200'
+        'c7056832020001000000a30000000061c3b80a000000833d6832020000740383'
+        'c0023945ac7d01c383c404e9fcffffff51b907000000833d0000000000750950'
+        'e8151f000001c158390c850000000059c3ff048500000000833c850000000008'
+        '750ee82a0000007507ff048500000000c3ff0c8500000000833c850000000008'
+        '750ee80a0000007507ff0c8500000000c3833de739000003c383f8087210833d'
+        '00000000007501c3b807000000c38b048500000000c3508b45086bc0548b8000'
+        '00000083f808730958833d0000000000c3833d00000000007441518d0c85983b'
+        '0000a0000000000a0501000000a820740cff097919c70140000000eb11a81074'
+        '19ff018339417206c70100000000606a01e8fcffffff83c40461595839c0c383'
+        '7c24040873105589e583ec30e902000000e96f0e0000833d000000000075f28b'
+        '442404e8fa1d000073e7a1e03b000085c07e063b44240475d88b442404e8990a'
+        '0000b805000000837c2404097505b809000000e83d0d0000e8d10d00008b4424'
+        '04e8340b0000e8d1090000837c2404097507e8b4000000eb26c6056040000001'
+        'ff742410ff742410ff742410ff742410e871ffffff83c410c6056040000000c6'
+        '05e43b000000e9da0d0000803d60400000000f84fcffffff837de8070f85fcff'
+        'ffffff742410ff742410ff742410ff742410e8fcffffff83c410e8fcffffffff'
+        '3578400000ff3574400000ff3570400000e8fcffffff83c40c6a03e8fcffffff'
+        '83c404e8fcffffffa1180000006a00ff7014ff7010ff700ce8fcffffff83c410'
+        'e8fcffffffe8fcffffffc360e8fcffffff833d7c3b000009754c833da8030000'
+        '0275436a00ff35483c00006a00e8fcffffff83c40c83ec04d905503c0000db1c'
+        '24e8fcffffffff35543c0000e8fcffffff83c4086a00ff354c3c00006a00e8fc'
+        'ffffff83c40cff35a43b0000ff35a43b0000ff35a43b0000e8fcffffff83c40c'
+        'e80a030000be403e000031ff833d7c3b000009754d833da8030000027544a19c'
+        '0300008d8850ffffff85c97c2083f91e7d0a8d3c09be483e0000eb1b83f93c7d'
+        '0c8d79e201ffbe503e0000eb0a0fb74e0431d2f7f189d70fb74e0439cf72038d'
+        '79ff6a006a015768e429020068182a0200ff351000000056e8fcffffff83c41c'
+        '6bff1a83c7196bff14033eff7710ff770cff7708e8fcffffff83c40c0fbf4704'
+        '50e8fcffffff0fbf4702890424e8fcffffff0fbf07890424e8fcffffff83c404'
+        'be803c0000833e00745681fed03c0000750ae8fcffffffe85a010000e8fcffff'
+        'ffff760cff7608ff7604e8fcffffff83c40cff7610e8fcffffff83c404e8fcff'
+        'ffff8b066a00ff7008ff7004ff30e8fcffffff83c410e8fcffffff83c614eba5'
+        'e8fcffffff833d7c3b0000090f85f8000000a19c030000833da8030000020f85'
+        'e60000003db00000000f8edb000000833d1c0000000075106a016a006aff6a03'
+        'e8fcffffff83c41031dbe8fcffffff6a00ff35703c00006a00e8fcffffff83c4'
+        '0c53e8fcffffff83c404a19c0300002db000000083f8147605b814000000ff35'
+        '943b000050db0424da357c3c0000d91c24ff35943b0000e8fcffffff83c40cff'
+        '35743c0000e8fcffffff83c404ff35783c0000ff35783c0000ff35783c0000e8'
+        'fcffffff83c40ce8fcffffffa19c0300004883e0038d0440c1e00203050c0000'
+        '006a00ff7008ff7004ff30e8fcffffff83c410e8fcffffff81c30040000081fb'
+        '008000000f8240ffffffe8fcffffffe8fcffffff61c38b0d583c000085c90f84'
+        'ba00000083ec04a10000000083e9187e4d89c2c1e20b8d1452890c24db0424d8'
+        '0d5c3c0000e895000000db1c24e8fcffffffa10000000089c2c1e20c8b0d583c'
+        '000083e918890c24db0424d80d603c0000e869000000db1c24e8fcffffffa100'
+        '00000089c2c1e20a8d1452db05583c0000d80d603c0000e843000000db1c24e8'
+        'fcffffff83c404a10000000083c00a8d14c50000000029c2c1e20a6a00db0558'
+        '3c0000d80d643c0000e81100000083ec04d91c246a00e8fcffffff83c40cc352'
+        'df0424d80d683c0000d9fedec95ac3803dec3d0000000f859a000000c605ec3d'
+        '0000016068f43d0000680000000068000000006824340200e8fcffffff83c410'
+        '6a0068800000006a036a006a0168000000806824340200ff150000000083f8ff'
+        '745389c3be003e0000833e0074406a006a00ff3653ff15000000006a0068f03d'
+        '0000ff7604ff760853ff15000000008b46043905f03d000075148b7e0c8b4608'
+        '89078b46106689470483c614ebbb53ff150000000061c3dc0500000000837d0c'
+        '0a742d837d0c0b7533dd0500000000d825983b0000d80d8c3b0000d835983b00'
+        '00d8059c3b0000dc2500000000dec1c3d8058c3b0000d825983b0000c3833c85'
+        'c4ffffff007408833c85000000000bc3833d7c3b0000090f856e010000ba9c03'
+        '0000837a0c020f855f010000833d583c0000007406ff0d583c00008b022db000'
+        '00007f2b83f8d8751dc705583c000020000000526a14e8fcffffff6a1ce8fcff'
+        'ffff83c4085a8b4238a36c3c0000c383f801750e50526a19e8fcffffff83c404'
+        '5a5883f829750e50526a07e8fcffffff83c4045a58d905a03b000089c183f928'
+        '7605b92800000051db042459d80d143c0000dec183f828760bd9051c3c0000e8'
+        'c8000000d905183c0000d86238d9eedff17204ddd8eb498105543c0000000200'
+        '00d905283c0000e8a0000000d9c0d80d2c3c0000d905303c0000dbf17204ddd8'
+        'eb02ddd9deead825343c0000d9eedff17204ddd8eb0adcc8d80d383c0000dec1'
+        'd9c0d86234d9c9d95a34d94238d9c0d8256c3c0000d9c9d91d6c3c0000d9c1d9'
+        'f3d80d403c0000d825503c0000d80d443c0000d805503c0000d91d503c0000d8'
+        '0d3c3c000031c983b9000000000b750ed981d8ffffffd8c1d999d8ffffff83c1'
+        '5481f9a800000072deddd8c3d94238d8e1d95a3831c983b9000000000b750ed9'
+        '81dcffffffd8e1d999dcffffff83c15481f9a800000072deddd8c3833d000000'
+        '00097536817dfce00000007c2dc7050000000001000000d905183c0000d82524'
+        '3c0000d81dd4030000dfe0f6c401750ac7050000000000000000a100000000c3'
+        '81f9e700000074083b048d00000000c350d905183c0000d825203c0000d81c8d'
+        '38000000dfe0f6c4017517d9eed81c8d34000000dfe0f6c401750731c083f801'
+        '58c331c039c058c33de70000007408d91c8534000000c3ddd8c3528d14850000'
+        '00008b0283f8087274d905903b0000d80d983b0000d825983b000083f809754a'
+        'd905a83b0000d80d983b0000d825983b0000dec1d905ac3b0000d80d983b0000'
+        'd842ecd95aecd905b03b0000d80d983b0000d842d8d95ad8d905b43b0000d80d'
+        '983b0000d842fcd95afcd9c0d842f0d95af0d842dcd95adcb8070000005ac3a1'
+        '0000000083f8087205b803000000c3803d7c400000007461e85d000000755a8b'
+        '1de03b000083fbff744f85db740abed83b0000e9a5010000803dd03b00000075'
+        '13c605d03b00000131f6bfdc640300e8d3000000bb08000000bec03b000089d8'
+        'e83d15000073095356e86f0100005e5b83c6084383fb0976e5c3833d00000000'
+        '047407833d0000000005c3e8eaffffff754ea1e03b000085c0754231c06bc854'
+        '83b9b40000000274114083f80976eec705d43b000000000000c38b15d43b0000'
+        'c705d43b00000100000085d2751183f8087305b8ffffffffa3e03b0000eb2dc3'
+        'c705e03b000000000000c705d43b0000ffffffffeb163b05e03b000074088d34'
+        'c5803b0000c3bed83b0000c3803dd03b0000007411c605d03b000000bedc6403'
+        '00e801000000c3fcbbc03b00008b13c1e20981c20000000031c05657b9800000'
+        '0085f6740489d7eb0289d6f3a55f5e85f6740881c600020000eb0681c7000200'
+        '0081c2004000004083f80372cd83c30481fbd03b000072b5c3fc31c089c1c1e1'
+        '0e8d91800200008db1000000008b0bc1e1098dbc0e8000000089d6b920000000'
+        'f3a581c68000000081c780000000b920000000f3a54083f80372c1c3833de03b'
+        '0000007f09803dd03b000000740e6089c3e820ffffffe80200000061c35389f3'
+        'e894ffffff83c304e88cffffff83eb0489de5b8b3e8b760489d8e8e701000085'
+        'd27519c1e3025357e8fcffffff83c408435356e8fcffffff83c408c35631c983'
+        '3d00000000007405b9020000008d34818d34b5000000008d5c12fe8b06ff3498'
+        '57e8fcffffff83c4088b46045fff74980457e8fcffffff83c408c3608b0d0100'
+        '00008d890500000081f9000000000f84a400000081e9000000008b54242429ca'
+        '81fa001c00000f838c000000bef03b000083f8097505bef83b00008b45086bc0'
+        '54d980000000008b450c6bc054d8a838000000d9ee8b1685d2741fd902dbf273'
+        '0fdceaddd8d805983b000083c604ebe5defad9c9d80d983b0000dec1d82d043c'
+        '0000d80d083c0000d9e8dff1761ed9050c3c0000dbf17204ddd9eb02ddd8d80d'
+        '103c0000db99641e0000eb0cddd8c781641e00000000000061c360e8d6fdffff'
+        '8b1ebfe83b0000e8140000008b5e0483c704e809000000c605e43b00000161c3'
+        '69c308080800b92000000039048d00000000740c4181f90004000072ee5861c3'
+        '890fc38b3500000000803de43b0000007501c39c50518b4a040fb74106c1e806'
+        '8b0485000000003d0808080074433d28282800743c3d18181800742e3d383838'
+        '0074275231c969148dc03b00000808080039d074094183f90472eb5aeb245af7'
+        'c1010000008b4a047407a1ec3b0000eb05a1e83b0000c1e006668361063f6609'
+        '410659589dc38b0485983b000031d285c0740a48b908000000f7f142c3c350e8'
+        '0401000083f808740c83f8077545e8def2ffff753e508b45086bc054d980ecff'
+        'ffffd825ac3b0000d998ecffffffd980d8ffffffd825b03b0000d998d8ffffff'
+        'd980fcffffffd825b43b0000d998fcffffff585850e8ae00000083f808740d83'
+        'f8077410d825943b000058c3d825a83b000058c3d825903b0000e872f2ffff75'
+        '06d825a83b000058c350e87900000083f809753e508b45086bc054d980ecffff'
+        'ffd805ac3b0000d998ecffffffd980d8ffffffd805b03b0000d998d8ffffffd9'
+        '80fcffffffd805b43b0000d998fcffffff585850e82f00000083f809740d83f8'
+        '08741dd805943b000058c3d805a83b0000e8fbf1ffff7506d805903b000058c3'
+        'd805903b000058c38b45086bc0548b8000000000c36089c580bd58350200000f'
+        '8587000000c6855835020001ff34ed04000000e8fcffffff83c40485c0746d89'
+        'c6ff34ed00000000680000000068000000006824340200e8fcffffff83c41068'
+        '000000006824340200e8fcffffff83c40885c0742e89c3536a01ff34ed040000'
+        '0056e8fcffffff83c4105053e8fcffffff83c4045883f80175098934ad283502'
+        '00eb0956e8fcffffff83c40461c360803d90410000007521a13c35020085c074'
+        '18ff35140000008f0592410000a314000000c6059041000001803d9141000000'
+        '7521a14c35020085c07418ff35240000008f0596410000a324000000c6059141'
+        '00000161c3803d90410000007413c6059041000000ff35924100008f05140000'
+        '00803d91410000007413c6059141000000ff35964100008f0524000000c38b44'
+        '240483f8087d1e85c00f8cfcffffff56e85d010000ba9a410000e8750100005e'
+        'e9fcffffffe8380f0000720dc7442404ffffffffe9fcffffff53568d58f86bdb'
+        '6881c3b0400000e82601000089dae8410100006a106a07e8fcffffff83c4086a'
+        '036a26e8fcffffff83c408ff7364ff7360ff735ce8fcffffff83c40c6a0e6a08'
+        'e8fcffffff83c4088d435050e8fcffffff83c4045e5bc38b44240483f8087319'
+        '85c00f8cfcffffff53bb9a410000e8840000005be9fcffffffe8a40e0000720d'
+        'c7442404ffffffffe9fcffffff538d58f86bdb6881c3b04000006affe8fcffff'
+        'ff83c404e84e000000a10000000083c002506a07e8fcffffff83c4086a036a26'
+        'e8fcffffff83c408ff7364ff7360ff735ce8fcffffff83c40cff35000000006a'
+        '08e8fcffffff83c4088d435050e8fcffffff83c4045bc3565789de31ffa10000'
+        '000001f850ff3500000000e8fcffffff83c40856e8fcffffff83c40481fe9a41'
+        '0000740383c61483c70283ff0872ce5f5ec3a100000000833d00000000027502'
+        'd1e8be00000000a9010000007405be00000000c35389d36a146a08e8fcffffff'
+        '83c40853ffd683c40481fb9a410000740383c3146a166a08e8fcffffff83c408'
+        '53ffd683c40481fb9a410000740383c3146a186a08e8fcffffff83c40853ffd6'
+        '83c40481fb9a410000740383c3146a1a6a08e8fcffffff83c40853ffd683c404'
+        '81fb9a410000740383c3145bc3fc31db6bf36e81c600000000668b560c69fb8a'
+        '00000081c7182e0200b937000000f366a56bf30681c67a13000031ede8130000'
+        '0081c68000000045e8070000004383fb0872bdc36689d066abb906000000833d'
+        '000000000075128d4508e8f30c0000730889f066ab40e2fbc36689d0f366abc3'
+        '31c0833d00000000007518e8ea0c000085c0740f83f801b8040000007405b807'
+        '000000c350e8d6fffffff7d883c00201050000000058c350e8c3ffffff83c00c'
+        '01050000000058c3518d8c00bc170000e8abffffff01c029c189c859c3518d8c'
+        '00c4170000e896ffffff01c029c189c859c3518d8c0008000000e881ffffff01'
+        'c029c189c859c3518d8c0010000000e86cffffff01c029c189c859c350e85eff'
+        'ffff01c02945fcd1e883c01f8945f858c3b8eb040000833d0000000000750e83'
+        '3de739000000740505b0040000c3e82dffffffc1e00350db042483c404dd0580'
+        '410000d8e1dd1d00000000dd0588410000dee1dd1d08000000c3ba00000000e8'
+        '1900000085c00f84fcffffff50ff7508e8fcffffff83c408e9fcffffff31c08b'
+        '4d0c89cbc1eb023b1d7c3b00007539bb00000000f6c1027405bb000000003b1d'
+        '883b000075228b1d843b000085db74184b83e103a1803b00008d04818b048283'
+        'e1018d0c598b0488c339c87c038d41ff66a300000000c3833df7390000007510'
+        '837c2404080f844b030000e9a40100008b44240483f8087305e9fcffffff60be'
+        '00000000bf74ba0200b980010000fcf3a5565751be00000000bf8cc80200b900'
+        '000000fcf3a5595f5ebe00000000bf783d0400b9d8000000fcf3a5be00000000'
+        'bfd8400400b950010000fcf3a53905d8ca0200752abe74ca0200bf00000000b9'
+        '80010000fcf3a5565751be74d00200bf00000000b900000000fcf3a5595f5eff'
+        '3500000000ff3500000000ff3500000000c7050000000001000000e8fcffffff'
+        'be2b3a0000833d64000000097505be373a0000ff36ff36ff36e8fcffffff83c4'
+        '0ca100000000d94024d84608d95824568b3500000000bf5cc80200b90c000000'
+        'fcf3a55ec605ba41000001bb0000000031c08943088943108b460489430c5383'
+        '7b6409751966c7433400008b436c85c07405a300000000e8be030000eb05e8f2'
+        '03000083c404c605ba41000000e8fcffffff8f05000000008f05000000008f05'
+        '00000000bed8400400bf00000000b950010000fcf3a5be783d0400bf00000000'
+        'b9d8000000fcf3a5565751be8cc80200bf00000000b900000000fcf3a5595f5e'
+        'be74ba0200bf00000000b980010000fcf3a561c38b44240483f8087305e9fcff'
+        'ffff60be00000000bf74ba0200b980010000fcf3a5565751be00000000bf8cc8'
+        '0200b900000000fcf3a5595f5ebe00000000bf783d0400b9d8000000fcf3a5be'
+        '00000000bfd8400400b950010000fcf3a53905d8c00200752abe74c00200bf00'
+        '000000b980010000fcf3a5565751be74c60200bf00000000b900000000fcf3a5'
+        '595f5eff3500000000ff3500000000ff3500000000c7050000000001000000e8'
+        'fcffffffbedc3a0000833d64000000097505bee83a0000ff36ff36ff36e8fcff'
+        'ffff83c40ca100000000d94024d84608d95824568b3500000000bf5cc80200b9'
+        '0c000000fcf3a55ec605ba41000001bb0000000031c08943088943108b460489'
+        '430c53837b6409751966c7433400008b436c85c07405a300000000e8fcffffff'
+        'eb03ff530483c404c605ba41000000e8fcffffff8f05000000008f0500000000'
+        '8f0500000000bed8400400bf00000000b950010000fcf3a5be783d0400bf0000'
+        '0000b9d8000000fcf3a5565751be8cc80200bf00000000b900000000fcf3a559'
+        '5f5ebe74ba0200bf00000000b980010000fcf3a561c38b44240483f8087305e9'
+        'fcffffff60be00000000bf74ba0200b980010000fcf3a5565751be00000000bf'
+        '8cc80200b900000000fcf3a5595f5ebe00000000bf783d0400b9d8000000fcf3'
+        'a5be00000000bfd8400400b950010000fcf3a53905d8c00200752abe74c00200'
+        'bf00000000b980010000fcf3a5565751be74c60200bf00000000b900000000fc'
+        'f3a5595f5eff3500000000ff3500000000ff3500000000c70500000000010000'
+        '00e8fcffffffbef43a0000833d64000000097505bee83a0000ff36ff36ff36e8'
+        'fcffffff83c40ca100000000d94024d84608d95824568b3500000000bf5cc802'
+        '00b90c000000fcf3a55ec605ba41000001bb0000000031c08943088943108b46'
+        '0489430c53837b6409751966c7433400008b436c85c07405a300000000e8fcff'
+        'ffffeb05e8ac00000083c404c605ba41000000e8fcffffff8f05000000008f05'
+        '000000008f0500000000bed8400400bf00000000b950010000fcf3a5be783d04'
+        '00bf00000000b9d8000000fcf3a5565751be8cc80200bf00000000b900000000'
+        'fcf3a5595f5ebe74ba0200bf00000000b980010000fcf3a561c3538b5c2408b8'
+        '09000000e8ccf5ffffe860f6ffffe8fcffffffff7310ff730cff7308e8fcffff'
+        'ff83c40ce842e9ffffe8fcffffffe892f6ffff5bc3833df73900000974bc538b'
+        '5c2408b805000000e888f5ffffe81cf6ffffe8fcffffffff7310ff730cff7308'
+        'e8fcffffff83c40cc60560400000016a006a006a006a08e8cae7ffff83c410c6'
+        '056040000000e8fcffffffe835f6ffff5bc3803dba41000000750b5589e55356'
+        '57e9fcffffff565751be5cc802008b3d00000000b90c000000fcf3a5595f5ec3'
+        '803dba41000000750aa100000000e9fcffffffe9fcffffff803dba4100000075'
+        '0f813d000000009a000000e9fcffffffe9fcffffffa10000000083f808741183'
+        'f80974128d04408d04800500000000c3b895390000c3b8a3390000c3803deb39'
+        '000000754f60c605eb39000001680000000068ae390000e8fcffffff83c40885'
+        'c0743089c3536a016a0468e7390000e8fcffffff83c41053e8fcffffff83c404'
+        '833de739000003760ac705e73900000000000061c360680000000068ae390000'
+        'e8fcffffff83c40885c0741d89c3536a016a0468e7390000e8fcffffff83c410'
+        '53e8fcffffff83c40461c30fb705080100008705103b0000833d00000000050f'
+        '8cc3000000833d0000000009740d833d00000000000f8dad000000b900000000'
+        '833db6410000007405b94442020083b900000000007c0bc705143b0000000000'
+        '00c33d06020000741566813d080100000602750ac705143b000001000000833d'
+        '143b0000007460d90508000000d82508000000d90510000000d82510000000d9'
+        'f3d835683c0000db1d183b0000a1183b0000662b0584010000983d000200007e'
+        '07b800020000eb183d00feffff7d07b800feffffeb0ac705143b000000000000'
+        '66010584010000c3c705143b000000000000c360a1000000004883f8017714c7'
+        '05ef39000001000000c705f339000000000000803d00000000027509833d0000'
+        '000000740ac705ef39000000000000833d000000001f7513833d000000000975'
+        '0ac705f339000001000000a10000000083f804751d0fb70d0000000083e92083'
+        'f9100f8392000000e8ec000000e98800000083f80a740583f80b757e833d0000'
+        '0000007509c6054b3a000000eb52803d4b3a0000007549a16400000083f80874'
+        '0e83f809753a833d000000005a7231c6054b3a000001be00000000bf74ca0200'
+        'b980010000fcf3a5565751be00000000bf74d00200b900000000fcf3a5595f5e'
+        '833d7c3b0000097511e81dfeffff66a18401000066a31a00000061c38db40000'
+        '00000083f84472078db40078ffffff0fb70e31f6f7c1ff3f0000743c89cef7c1'
+        '00400000741181e6ff3f0000c1e607033500000000eb0f81e6ff7f0000c1e607'
+        '03350000000081fe80ffffff770881fe00104000730231f6c360fc31db89d8e8'
+        '98ffffff85f6741289dfc1e70781c75cd20200b920000000f3a54381fb920000'
+        '0072dac605073a00000161c360fc803d073a0000000f84aa000000803d0b3a00'
+        '0000755dbf5c1b0300a10000000029f883e07f01c789fd2b2d000000000f8282'
+        '000000c1ed078d85920000003d004000007372be5cd20200b940120000f3a589'
+        '2d0f3a00008b0d00000000890d133a000039c87605a300000000c6050b3a0000'
+        '018b2d0f3a000031dbba44000000833df739000008740abb44000000ba920000'
+        '00bfdc3c040089d8e8cffeffff31c0f7c1ff3f000074048d441d0066ab4339d3'
+        '72e461f8c361f9c3803d0b3a000000741350a1133a0000a300000000c6050b3a'
+        '00000058c3803dc241000000751b60fcbe00000000bfdc7c0300b900300000f3'
+        'a5c605c24100000161c3803dc241000000741b60fcbedc7c0300bf00000000b9'
+        '00300000f3a5c605c24100000061c360fc833dca4100000075166804380f00e8'
+        'fcffffff83c404a3ca41000085c074598b3dca410000be00000000b980010100'
+        'f3a5be00000000b910190200f3a5be00000000b971b30000f3a5a100000000a3'
+        'de410000a100000000a3d2410000a100000000a3d6410000a100000000a3da41'
+        '0000c605ce4100000161c3803dce41000000746660fc8b35ca410000bf000000'
+        '00b980010100f3a5bf00000000b910190200f3a5bf00000000b971b30000f3a5'
+        'a1de410000a300000000a1d2410000a300000000a1d6410000a300000000a1da'
+        '410000a300000000a1c6410000a300000000c605ce4100000061c3837c240801'
+        '750b508b442408a3e641000058e9fcffffff0001030200010202010102020302'
+        '020350518b0de73900000fb6893222000083e8080fa3c15958c3a1e73900000f'
+        'b68036220000c3833d00000000007510803d00000000027507833def39000001'
+        'c3ff0500000000c705ef39000000000000c3c705000000001c000000e8c6ffff'
+        'ff754350b808000000e894ffffff587235833d6400000008752c50a1e7390000'
+        '0fb6803a220000a3e739000058e883faffffc705f739000008000000c705fb39'
+        '000000000000c3833df339000000746bc705f339000000000000e868ffffff75'
+        '5ab809000000e837ffffff724ea1e73900000fb6803e220000a3e7390000e832'
+        'faffffa100000000a3c6410000a1e6410000a3e2410000e8f3fdffffc705f739'
+        '000009000000c705fb39000000000000c705000000001c000000c3c705000000'
+        '0016000000c3833df7390000007505e9fcffffffc3833df7390000007505e9fc'
+        'ffffff60833dfb390000000f859a000000681a100000e8fcffffff83c404c705'
+        'ff39000090010100c605033a000000e831fdffff8b1df7390000c1e3028d0350'
+        '6a01e8fcffffff83c4088d4301506a03e8fcffffff83c4088d4302506a05e8fc'
+        'ffffff83c4088d4303506a07e8fcffffff83c408a1f73900008d3cc5803b0000'
+        '8d0350ff37e8fcffffff83c4088d430150ff7704e8fcffffff83c4086a00e8fc'
+        'ffffff83c404e8fcffffff833dfb3900001e75306a00e8fcffffff83c404e8fc'
+        'ffffffff351b3a0000ff35173a0000e8fcffffff83c40868b9390000e8fcffff'
+        'ff83c404833dfb3900003c7541e89afbffff723a8b1df739000083eb08ff3527'
+        '3a0000ff349d1f3a0000e8fcffffff83c4086bdb6881c3b0400000ff7364ff73'
+        '6068dc3c0400e8fcffffff83c40c803d033a0000007543db05fb390000d80ddf'
+        '390000d905e3390000dbf1dbc1ddd983ec04d91c24ff3500000000a1f7390000'
+        'a300000000ff742404e8fcffffff83c4048f050000000083c404a1fb3900002d'
+        '2c0100000f828f000000a91f000000753989c3ff35473a0000ff35433a0000e8'
+        'fcffffff83c408f7c320000000750f68c6390000e8fcffffff83c404eb0c6a02'
+        '6a34e8fcffffff83c408a10000000025100101008a0d000000000a0d00000000'
+        '81e18000000009c8803d033a00000075248b0dff390000a3ff390000f7d185c8'
+        '7417c605033a0000016a12e8fcffffff83c404eb0485c07408ff05fb39000061'
+        'c36a00e8fcffffff83c404e8fcffffffe813fbffffe850fbffff6a00e8fcffff'
+        'ff83c404c70500000000ffffffff6a016aff6a0ae8fcffffff83c40cc705fb39'
+        '000000000000a1f7390000c705f739000000000000c705000000001c00000083'
+        'f8087432e8a2fbffff6a01ff35e2410000e8fcffffff83c40866c70500000000'
+        '9100c7050000000081000000c705000000001600000061c3a10000000083f808'
+        '0f83fcffffffe9fcffffff833d00000000080f83fcffffff837df4000f84fcff'
+        'ffffe9fcffffffa10000000083f8080f83fcffffffe9fcffffffa10000000083'
+        'e80883f801762a813d0000000000000000741e813d0000000000000000741283'
+        '3d00000000000f85fcffffffe9fcffffffa10000000083f8087205a3cc3a0000'
+        '833d0000000000750fc7050000000003000000e9fcffffffa1cc3a000085c074'
+        '05a300000000833d00000000020f82fcffffff0f84fcffffffe9fcffffff833d'
+        '00000000097405e9fcffffff813d000000009e0200007510ff0500000000c705'
+        '0000000001000000813d00000000b00500007506ff050000000050b800000000'
+        '833db6410000007405b8444202000500000000833d00000000010f843d010000'
+        '833d00000000020f8277020000c7050000000007000000813804010000751f81'
+        '3d00000000e0000000731366833d78010000707c0966c705780100007000813d'
+        '00000000e60000007377803db43a000000752fc605b43a000001c705c03a0000'
+        '00000000ff35000000008f05bc3a0000d90500000000d80dc43a0000d91d0000'
+        '0000ff05c83a0000833dc83a0000037235c705c83a00000000000051528d0d00'
+        '020000ba200000008039cb750af6410380750466ff490483c1204a75eb5a59eb'
+        '05e8ff0100008b0d0000000081e93f0200007d0658e9fcffffffe858090000c6'
+        '05d03a000000c705743a000000000000c705a03a00000000000058ff350c0000'
+        '00ff3510000000d9050c000000d8057c3a0000d91d0c000000d90510000000d8'
+        '05803a0000d91d10000000e8fcffffff8f05100000008f050c000000c3833da0'
+        '3a00001f732a813d00000000ff000000751eff05a03a000050a1a03a00000500'
+        '020000a30000000058c605ae41000001803dd03a0000007551833d743a000000'
+        '752bc705743a00000100000066c70570010000060066c7057c010000000066c7'
+        '05780100000000c700000000008138020100000f8cb0000000c605d03a000001'
+        'c705743a000000000000c70002010000ff05743a00005860beb0000000bf1042'
+        '0000b914000000fcf3a566a17801000066a36042000066a1a401000066a36242'
+        '000066c70578010000ff7fe8fcffffff66a16042000066a37801000066a16242'
+        '000066a3a4010000be10420000bfb0000000b914000000fcf3a561813d743a00'
+        '00f00000007221c605d03a000000c705743a000000000000ff0500000000c705'
+        '0000000002000000c358c7050000000000000000e8fcffffffc7050000000001'
+        '000000c3c605783a000000e835000000c605d03a000000c705743a0000000000'
+        '00c705a03a00000000000058e9fcffffff803db43a0000000f84fcffffffd905'
+        'b83a0000c3803db43a0000007418c605b43a0000005051a1c03a00008b0dbc3a'
+        '000089085958c3833d0000000009740d8b45f00500000000e9fcffffffa10000'
+        '000083e802a3b03a0000db05b03a0000d80da43a0000d80510000000d805ac3a'
+        '0000d91d08420000d9050c000000d805a83a0000d91d04420000a108000000a3'
+        '00420000c745e4f0410000e9fcffffff833d00000000087305e9fcffffff56be'
+        '643a0000833d00000000097521813d000000003f0200007d10833d0000000002'
+        '7d0cbe683a0000eb05be6c3a0000d906813d000000003a0200007d3ad9442408'
+        'd80524000000dcc8d944240cd80528000000dcc8dec1d9442410d8052c000000'
+        'dcc8dec1d9fad83d703a0000d8c9dbf17302d9c9ddd8d9442408d80524000000'
+        'd8c9d82524000000d95c2408d944240cd80528000000d8c9d82528000000d95c'
+        '240cd9442410d8052c000000d8c9d8252c000000d95c2410ddd8b83a0200002b'
+        '05000000007e4583f8407605b840000000a3d83a0000db05d83a0000d80dd43a'
+        '0000d9052c000000d8442410d8c9d90524000000d8442408d8cad8442410d95c'
+        '2410d86c2408d95c2408ddd85ee9fcffffff833d7c3b000009c3e8f3ffffff0f'
+        '85fcffffff0fbf0d0000000051e8fcffffff83c404d80d503a0000d8442404d9'
+        '5c24040fbf0d0000000051e8fcffffff83c404d80d503a0000d86c240cd95c24'
+        '0ce9fcffffff833d7c3b00000872308b4dfcd9413cd81d5c3a0000dfe0f6c401'
+        '7408a15c3a000089413ce883ffffff750e6681791e000c7d0666c7411e000c8b'
+        '45fc0fbf401ee9fcffffff8b45fcd94040833d7c3b0000087508d80d583a0000'
+        'eb24833d7c3b000009751bd80d543a0000d815603a0000dfe0f6c4017408ddd8'
+        'd905603a0000dec9c3833d7c3b0000097513833d0000000009750a817c240400'
+        '000000740b5589e5535657e9fcffffffc3833d7c3b0000097513833d00000000'
+        '09750a817c240400000000740e5589e583ec0c535657e9fcffffff5589e583ec'
+        '0c5356578b4508833d00000000057d39c68037010000ff66c7800e0100000000'
+        '66c78072010000000066c780860100000000c780c4010000000000008b406ca3'
+        '00000000e9fcffffff8b406ca300000000e9fcffffffc7050000000000000000'
+        'c705143b000000000000833d7c3b000009753f50518b45083d0000000075318b'
+        '0d0000000083f90a73268b0c8d1c3b0000890d0000000083e9787d0231c969c9'
+        '80000000f7d981c100400000668948345958c3833d0000000000753a833d7c3b'
+        '0000097532833d00000000097429833d00000000007c20813d0c3b0000580200'
+        '007314ff050c3b0000c705000000000100000083fc00c3c7050c3b0000000000'
+        '00833d0000000000c38b450831c93d00000000751b833d7c3b00000975128a88'
+        '4301000080f9ff740d8a8842010000c38a883b010000c38b4424043d00000000'
+        '0f85fcffffff833d00000000090f84fcffffff5589e583ec0cff7514ff7510ff'
+        '750cff7508e8fcffffff83c410d955fcd81d443b0000dfe0f6c4010f848c0000'
+        '008b45088d4df451ff7010ff700850e8fcffffff83c410d955f8d81d443b0000'
+        'dfe0f6c401745ed945fcd865f8d815483b0000dfe0f6c44175438b45088b88c8'
+        '0100008b90cc01000089c825ffffff7f5281e2ffffff7f39d05ab80040000072'
+        '0b85c97912b800c00000eb0b31c085d27805b8008000008b4d146689018b4508'
+        'd8400ceb0b8b4508d9400ceb03d945fcc9c3833d7c3b0000097509817d080000'
+        '00007412833d00000000000f8dfcffffffe9fcffffff833d00000000050f8dfc'
+        'ffffffe9fcffffff833d7c3b0000097509817d08000000007412833d00000000'
+        '000f8dfcffffffe9fcffffff833d00000000050f8dfcffffffe9fcffffff833d'
+        '7c3b000009751e833d000000000975153d000000000f84fcffffff837864090f'
+        '84fcffffff0fbf403085c00f85fcffffffe9fcffffff5589e581ec0000000053'
+        '5657833d7c3b0000090f85fcffffff833d00000000090f85fcffffff8b45083d'
+        '000000007405e9fcffffff8b486c85c90f84fcffffff81f9443a02000f84fcff'
+        'ffff81f9000000000f85fcffffff833db241000000751989cebf443a0200b900'
+        '020000fcf3a5c705b2410000010000008b706c8b787029f7c7406c443a02008d'
+        'bf443a0200897870e9fcffffff833d7c3b0000097513833d0000000009750a81'
+        '7c240400000000740e5589e583ec04535657e9fcffffff833db641000000757e'
+        '565751be00000000bf44420200b900000000fcf3a5595f5eba44420200c78200'
+        '000000ffffffffc78200000000ffffffffc78200000000ffffffffc705b64100'
+        '0001000000508b44240883786800b8000000007405b800000000898200000000'
+        '83c05889820000000005f001000089820000000083c018898200000000585657'
+        '51be00000000bf2c440200b900000000fcf3a5595f5e565751be44420200bf00'
+        '000000b900000000fcf3a5595f5eff742404e832ffffff83c404565751be0000'
+        '0000bf44420200b900000000fcf3a5595f5e565751be2c440200bf00000000b9'
+        '00000000fcf3a5595f5ec3c705b641000000000000ff742404e8fcffffff83c4'
+        '048b4424043d000000007401c366c780700100000000c381f9fb0000007e05b9'
+        'fb000000c605783a00000183f9357d48b83500000029c8a3883a0000db05883a'
+        '0000dcc8d80d8c3a0000d82d903a0000d91d7c3a0000c705803a000000000000'
+        '69c080000000f7d805001800007d0231c066a3843a0000c3a1903a0000a37c3a'
+        '000083e93583f9507d2b890d883a0000db05883a0000d80d943a0000d9e0d91d'
+        '803a0000c1e10781c10018000066890d843a0000c383e950890d883a0000db05'
+        '883a0000d80d983a0000d8059c3a0000d9e0d91d803a000066c705843a000000'
+        '40c38b442404803dd03a00000175073d000000007415803d783a00000074073d'
+        '000000007413e9fcffffffe84900000050e8fcffffff58eb40ff700cff7010ff'
+        '7034d9400cd8057c3a0000d9580cd94010d805803a0000d95810668b0d843a00'
+        '0066f7d96689483450e8fcffffff588f40348f40108f400cc3515231c98b9408'
+        'b0000000879110420000899408b000000083c10483f95072e4668b9078010000'
+        '6687156042000066899078010000668b90a401000066871562420000668990a4'
+        '0100005a59c38b44240483786408750d8078300575073d000000007405e9fcff'
+        'ffffffb0c000000066c780c2000000000050e8fcffffff588f80c0000000c3a1'
+        '00000000a300000000c605ae41000000817d08000000007401c3c605ae410000'
+        '01c3803dae410000007415813d883b0000000000000f84fcffffffe9fcffffff'
+        '837df4000f84fcffffffe9fcffffff803dae4100000074488b1d7c3b000085db'
+        '7505bb09000000c1e302be01000000813d883b000000000000750883cb02be05'
+        '0000005356e8fcffffff83c4084383c6025356e8fcffffff83c408e9fcffffff'
+        '837df4000f84fcffffffe9fcffffff803dae410000000f85fcffffff837df400'
+        '0f84fcffffffe9fcffffff803dae410000000f85fcffffff837df4000f84fcff'
+        'ffffe9fcffffffb9800100006089c2c1ea0969d2e003000081c214460200fc81'
+        'ff00000000754389d6bf00000000b900000000f3a58db2e8010000bf44420200'
+        'b97a000000f3a58b82d0030000a3b64100008b82d4030000a3143b00008b82d8'
+        '030000a3103b000061c389d7be00000000b900000000f3a58dbae8010000be44'
+        '420200b97a000000f3a5a1b64100008982d0030000a1143b00008982d4030000'
+        'a1103b00008982d803000061c3528b55102b15140000003b152c00000073168b'
+        '55108b52fcc1ea1283e21f83fa0075052d008000005aa300000000c3837dfc00'
+        '0f8406010000833d7c3b0000090f85f9000000817d08000000000f85ec000000'
+        'e8ec000000d80d75370000d91d5cba0200e89e010000e8fcffffffe8fcffffff'
+        '680000803f68f6285cbe68898888bde8fcffffff83c40cb86f12033b833d64ba'
+        '0200007405b8a69bc43b680000803f50680e74da3ae8fcffffff83c40c680000'
+        '803fff356cba0200ff355cba0200e8fcffffff83c40c6a006a00680000803fe8'
+        'fcffffff83c40ce8fcffffff6a016800000000ff3558ba02006a00e8fcffffff'
+        '83c410e8fcffffff6a236a1ae8fcffffff83c408833d60ba020000740c6a01e8'
+        'fcffffff83c404eb236a00e8fcffffff83c4046a276a1ae8fcffffff83c40868'
+        '85370000e8fcffffff83c4045f5e5bc9c3b900000000833db6410000007405b9'
+        '444202008b8900000000c70558ba020000000000c7056cba02000000a040c705'
+        '70ba02000000000083f9007c7081f9040100007c2e81f9090200007d6081e903'
+        '0100006bc96431d289c8b905010000f7f1a354ba0200db0554ba0200d8357937'
+        '0000c3c70558ba020000000000a100000000c1e00c50e8fcffffff83c404d80d'
+        '7d370000d80581370000d91d6cba0200c70570ba020001000000d9e8c3c70570'
+        'ba020001000000c70558ba020000000000d9e8c3c70560ba020000000000833d'
+        '70ba0200007559833d64ba0200007406ff0d64ba02008b450880b84201000000'
+        '744880b84301000000743fc70560ba020001000000c70564ba02001e00000083'
+        '3d68ba020000752cc70568ba020001000000688e000000e8fcffffff83c404c3'
+        'c70564ba020000000000c70568ba020000000000c3000020420000c842000040'
+        '400000c04043414e4e4f4e00596800000000833d7c3b000009751a8b45083d00'
+        '000000751080b838010000007407c7042400000000ffe1596800000000833d7c'
+        '3b000009751a8b45083d00000000751080b839010000007407c7042400000000'
+        'ffe1596800000000833d7c3b000009751a8b45083d00000000751080b83a0100'
+        '00007407c7042400000000ffe1508b45088b406483f809741383f808753ad905'
+        '503b0000d905543b0000eb0cd9054c3b0000d905583b0000d80d5c3b0000d9c9'
+        'd9e8dee9d80d5c3b0000d9e8dec1decadbf17602d9c9ddd858c3c7055c3b0000'
+        '0000803fe8a4ffffffd91d00000000c3ff05003b000050a1003b0000c1e80983'
+        'f8047322a3043b0000db05043b0000d82d083b0000d835083b0000d91d5c3b00'
+        '00e867ffffff58d91d00000000c3d905603b0000c7055c3b00000000803fe84a'
+        'ffffffd91d00000000c3d905643b0000c7055c3b00000000803fe82effffffd9'
+        '1d00000000c3a10000000083f809741083f8080f85fcffffffa16c3b0000eb05'
+        'a1683b0000a3703b00000fbf0d0000000051e8fcffffff83c404d80d703b0000'
+        'd91d743b00000fbf0d0000000051e8fcffffff83c404d80d743b0000d86c2404'
+        'd95c24040fbf0d0000000051e8fcffffff83c404d80d743b0000d844240cd95c'
+        '240c0fbf0d0000000051e8fcffffff83c404d80d703b0000d9e4dfe0f6c40174'
+        '07ddd8e9fcffffffd86c2408d95c2408e9fcffffff56522e4a4147554152414e'
+        '44490056522e5a2d475241445400626f737365732e62696e00594f5520554e4c'
+        '4f434b454400505245535320425554544f4e20544f20434f4e54494e5545000a'
+        'd7a33c6666663f00000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000290000001300000024'
+        '00000028000000160000009a99593f000020410000e0403333b33e0000104200'
+        '00e040090000002e00000000000000900000a043000020400000c03f00006042'
+        '0000344300002040000080400000004100004842000000000000000000000000'
+        '000000000000000000000000cdcccc3c00008c429a9999400000a0410000c043'
+        '00000000000040410000f041000020420000000000000000286b6ece00000000'
+        '00000000000040400000000000000000000000009a99993b000000009a99193f'
+        '00008040000000006666e63e000020410000a0c09a99593f0000e04000008040'
+        '0000000000000000000080400000000000000000000000000000000064000000'
+        'c7000000640000003c00000064000000c7000000640000006400000064000000'
+        'c700000000007a4400008040000080400000004000007a43000000000000803f'
+        '00000c420000f0410000f0420000a04200000000000000000000000000000000'
+        '0000000000000000000000000000f0410000c03f0000803f0000a0410000c442'
+        '0000b0410000803f9a9959409a991940a470dd3f666646400000000000000000'
+        '15000000190000001d0000000f00000000000000ffffffff0100000003000000'
+        '000000000000000000000000000000008c3b0000000000009c3b00008c3b0000'
+        '00000000a470e341abaaaa3d0000803700008047cdcc4c3e0000bec30000c040'
+        '00001643000070c20000a041cdcc4c3d000020420000fa446f1283393333333f'
+        '83f922469a99193e0000a0410000a0c100000000000000000000000000000041'
+        '000080408fc2f53cdb0fc93800000000000070c1c0d6ffff0000804014000000'
+        '0000000000000000000050c10000d84100000000000000000000d8c1000050c1'
+        '00000000004000000000000000000000000050c10000d8c10080000000000000'
+        '0000d841000050c10000000000c000000c00000000000000000070c10000f040'
+        '0000000000000000000000000000404100000000000000000000000000000000'
+        '0000404100000000000000001800000000000000000040410000000000000000'
+        '0000000066661ec20000a0400000000000000000000000009a9901c20000a040'
+        '00000000000000000000000066661e420000a040000000000000000000000000'
+        '9a9901420000a040000000000000000024000000000030c10000a04000000000'
+        '000000003c000000cdccacc100003041000000000000000048000000cdccacc1'
+        '00007841000000000000000030000000000030410000a0400000000000000000'
+        '3c000000cdccac4100003041000000000000000048000000cdccac4100007841'
+        '00000000000000000000000000000000000000006d745f7a69672e62696e0090'
+        'e0791100c0f3000064420000403e00007800000018491000e079000024360100'
+        '483e00003c000000f8ff1000e079000004b00100503e00003c00000000000000'
+        '583e000001001a00583e000001001a00583e000001001a00b71bff1f06000000'
+        'f5dbd0c1a7797c41e5d0d041c41b01e00700000036cdd041696f7c4186dad041'
+        'c11b0060f5ff00006eb4d0c1c4427c41aec7d0c1bb1b01a0f8ff0000ccddd041'
+        '787a7c4101cdd0c1f5ff00a0000000007ce1aec12d210341ebe2ae41420eff1f'
+        '03000000431c50c10000c841ac1c50413f0eff1f000000001a5186c1f30eb141'
+        'd94e8641faffff5ff9ff0000e5e1ae416f12034148e1ae413e0e00e006000000'
+        '711b50413400c841431c5041410e00e000000000234a8641ea04b1416a4d8641'
+        'fdff01e000000000b1bfaec11ff40241c1caaec13b0e0060f8ff0000d20050c1'
+        '3400c8412eff4fc13e0e006000000000583986c191feb041713d86c1faff0020'
+        '0000000066e6ae41ce19034154e3aec1340e01a0faff0000091b50416900c841'
+        '711b50c1420e01a0000000009f4d86412506b141ba4986c103000000fdff0000'
+        '17b751b93400e04117b75139fdffff7ffdff00006f12833b85eb7f4163ee6fc1'
+        '03000000fdff00004b59863ba60a80419d117041943ffc3f69c000009eef6fc1'
+        'b3ea7f4104e78c3b6bc0fdbf68c00000621070410f0b804127a0893bfdffff7f'
+        'fdff00000ad7233b3400a2413480373b03000000fdff00000ad7233b3400a241'
+        '3480373b943ffc3f69c000000ad7233b3400a2413480373b68c0fdbf64c00000'
+        '0ad7233b3400a2413480373b000000000000000017b751b93400e04117b75139'
+        '000000009a99993e8fc2f53cc0ff00000000000014ae07400ad7a3bc00000000'
+        '0000000000000442000000000400000005000000020000000100000007000000'
+        '0600000003000000080000000900000042415a4f4f4b41202020202020202020'
+        '000000005452415020424f4d4220202020202020000000003130204c41534552'
+        '2020202020202020000000002020202020202020202020202020202000000000'
+        '5655562d39382d562020000000000000220000000200000052494e4720424541'
+        '4d20202020202020000000005048414c414e5820202020202020202000000000'
+        '464c4f4154494e47204d494e45202020000000004c415345522043414e4e4f4e'
+        '20202020000000005a55562d39392d5a20200000000000001a00000003000000'
+        '0000000000c055c000000000002061c000000000000000000000202020202020'
+        '2020202020202020202000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000040000000400000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '000000000000000000000000000000000000000000000000'
+    ), (
+        (0x17, 'abs', '.', 15104),
+        (0x24, 'abs', 'BS_SCENEA', 0),
+        (0x35, 'abs', '.', 15224),
+        (0x3b, 'abs', '.', 15224),
+        (0x59, 'abs', '.', 15228),
+        (0x63, 'abs', '.', 15440),
+        (0x6d, 'abs', '.', 15448),
+        (0x77, 'abs', '.', 15444),
+        (0x81, 'abs', '.', 15052),
+        (0x8b, 'abs', '.', 16822),
+        (0x95, 'abs', '.', 14968),
+        (0xa1, 'abs', 'BS_G1PA', 0),
+        (0xaa, 'abs', 'BS_G1PA', 0),
+        (0xb5, 'abs', 'BS_SCENEA', 0),
+        (0xc3, 'abs', 'BS_STATEA', 0),
+        (0xcc, 'abs', '.', 15228),
+        (0xd6, 'abs', 'BS_READYA', 0),
+        (0xdf, 'abs', '.', 16830),
+        (0xe8, 'abs', '.', 16830),
+        (0xf0, 'abs', 'BS_OBJA', 100),
+        (0x100, 'abs', 'BS_READYA', 0),
+        (0x109, 'abs', '.', 16830),
+        (0x10f, 'abs', 'BS_OBJA', 0),
+        (0x114, 'abs', '.', 180340),
+        (0x124, 'abs', 'BS_BSSA', 0),
+        (0x129, 'abs', '.', 181876),
+        (0x12e, 'abs', 'BS_AIDW', 0),
+        (0x13a, 'abs', 'GAMEMODE', 0),
+        (0x151, 'rel', 'BS_IDLE', -4),
+        (0x156, 'abs', 'BS_COL0', 0),
+        (0x15c, 'abs', 'BS_MODEA', 0),
+        (0x164, 'abs', 'BS_COL1', 0),
+        (0x169, 'abs', 'BS_G1PA', 0),
+        (0x16f, 'abs', '.', 15228),
+        (0x179, 'abs', 'GAMEMODE', 0),
+        (0x187, 'abs', '.', 15240),
+        (0x193, 'abs', '.', 15232),
+        (0x199, 'abs', '.', 15236),
+        (0x1a0, 'abs', '.', 15228),
+        (0x1aa, 'abs', '.', 16508),
+        (0x1b6, 'abs', 'BS_SELSCRA', 0),
+        (0x1bb, 'abs', '.', 144740),
+        (0x1c8, 'abs', 'BS_SELSCRA', 432),
+        (0x1cd, 'abs', '.', 145220),
+        (0x1da, 'abs', 'BS_SELSCRA', 432),
+        (0x1df, 'abs', '.', 145268),
+        (0x1ec, 'abs', 'BS_SELSCRA', 480),
+        (0x1f1, 'abs', '.', 145316),
+        (0x1fe, 'abs', '.', 145220),
+        (0x20e, 'abs', '.', 15244),
+        (0x217, 'abs', '.', 15260),
+        (0x223, 'abs', '.', 15264),
+        (0x232, 'abs', 'BS_SELROWS', 0),
+        (0x237, 'abs', '.', 143980),
+        (0x244, 'abs', 'BS_SELROWS', 80),
+        (0x249, 'abs', '.', 144180),
+        (0x256, 'abs', 'BS_SELSWAP', 0),
+        (0x25b, 'abs', '.', 144220),
+        (0x268, 'abs', 'BS_SELSPEC', 0),
+        (0x26d, 'abs', '.', 144380),
+        (0x27f, 'abs', '.', 144252),
+        (0x284, 'abs', '.', 144256),
+        (0x289, 'abs', '.', 144412),
+        (0x28e, 'abs', '.', 144416),
+        (0x293, 'abs', 'BS_SELLCAM', 0),
+        (0x298, 'abs', '.', 144260),
+        (0x2a5, 'abs', '.', 16484),
+        (0x2aa, 'abs', '.', 144356),
+        (0x2b7, 'abs', '.', 16484),
+        (0x2bc, 'abs', '.', 144368),
+        (0x2c9, 'abs', 'BS_JAGA', 32),
+        (0x2ce, 'abs', '.', 144172),
+        (0x2d3, 'abs', 'BS_JAGA', 28),
+        (0x2d8, 'abs', '.', 144176),
+        (0x2de, 'abs', '.', 16508),
+        (0x2e4, 'abs', 'BS_SELSCRA', 0),
+        (0x2ea, 'abs', '.', 143976),
+        (0x2f4, 'abs', 'GAMEMODE', 0),
+        (0x2fc, 'abs', '.', 144740),
+        (0x302, 'abs', '.', 143976),
+        (0x30b, 'abs', 'BS_SCRPTR', 0),
+        (0x318, 'abs', '.', 143976),
+        (0x32c, 'rel', 'BS_SELHIDEX', -4),
+        (0x338, 'abs', 'GAMEMODE', 0),
+        (0x34b, 'abs', 'BS_SELCUR', 0),
+        (0x354, 'abs', 'BS_SELCUR', 0),
+        (0x35b, 'abs', 'BS_SELCUR', 0),
+        (0x36c, 'abs', 'BS_SELCUR', 0),
+        (0x374, 'abs', 'BS_SELCUR', 0),
+        (0x37b, 'abs', 'BS_SELCUR', 0),
+        (0x38c, 'abs', 'BS_SELCUR', 0),
+        (0x393, 'abs', '.', 14823),
+        (0x3a0, 'abs', 'GAMEMODE', 0),
+        (0x3b1, 'abs', 'BS_SELINVA', 0),
+        (0x3bf, 'abs', 'BS_SELCUR', 0),
+        (0x3cb, 'abs', 'BS_COLSEL', 0),
+        (0x3d3, 'abs', 'BS_COLSEL', 0),
+        (0x3de, 'abs', '.', 15256),
+        (0x3e3, 'abs', 'BS_SELPADS', 0),
+        (0x3e9, 'abs', 'BS_SELPADS', 1),
+        (0x412, 'rel', 'BS_SFX', -4),
+        (0x42d, 'rel', 'BS_SELMDLA', 2),
+        (0x438, 'abs', 'GAMEMODE', 0),
+        (0x44b, 'abs', '.', 15328),
+        (0x49b, 'abs', '.', 16480),
+        (0x4ba, 'abs', '.', 16480),
+        (0x4c1, 'abs', '.', 15332),
+        (0x4cd, 'abs', '.', 16480),
+        (0x4d4, 'rel', 'BS_MESHA', -4),
+        (0x4de, 'rel', 'BS_MESHA', -4),
+        (0x4f3, 'rel', 'BS_MESHA', -4),
+        (0x4fb, 'rel', 'BS_MPUSHA', -4),
+        (0x501, 'abs', '.', 16504),
+        (0x507, 'abs', '.', 16500),
+        (0x50d, 'abs', '.', 16496),
+        (0x512, 'rel', 'BS_VIEWA', -4),
+        (0x51c, 'rel', 'BS_ROTXA', -4),
+        (0x524, 'rel', 'BS_MSETA', -4),
+        (0x529, 'abs', 'BS_JAGA', 24),
+        (0x539, 'rel', 'BS_MESHA', -4),
+        (0x541, 'rel', 'BS_MPOPA', -4),
+        (0x546, 'rel', 'BS_MSETA', -4),
+        (0x54d, 'rel', 'BS_MPUSHA', -4),
+        (0x553, 'abs', '.', 15228),
+        (0x55c, 'abs', 'BS_SELOBJ', 936),
+        (0x567, 'abs', '.', 15432),
+        (0x56e, 'rel', 'BS_VIEWA', -4),
+        (0x57a, 'abs', '.', 15440),
+        (0x582, 'rel', 'BS_ROTXA', -4),
+        (0x588, 'abs', '.', 15444),
+        (0x58d, 'rel', 'BS_ROTYA', -4),
+        (0x598, 'abs', '.', 15436),
+        (0x59f, 'rel', 'BS_VIEWA', -4),
+        (0x5a8, 'abs', '.', 15268),
+        (0x5ae, 'abs', '.', 15268),
+        (0x5b4, 'abs', '.', 15268),
+        (0x5b9, 'rel', 'BS_MSCALEA', -4),
+        (0x5c6, 'abs', '.', 15936),
+        (0x5ce, 'abs', '.', 15228),
+        (0x5d7, 'abs', 'BS_SELOBJ', 936),
+        (0x5df, 'abs', 'BS_SELOBJ', 924),
+        (0x5f6, 'abs', '.', 15944),
+        (0x607, 'abs', '.', 15952),
+        (0x628, 'abs', '.', 141796),
+        (0x62d, 'abs', '.', 141848),
+        (0x633, 'abs', 'BS_ZGA', 16),
+        (0x639, 'rel', 'BS_POSEA', -4),
+        (0x655, 'rel', 'BS_VIEWA', -4),
+        (0x662, 'rel', 'BS_ROTZA', -4),
+        (0x66e, 'rel', 'BS_ROTYA', -4),
+        (0x679, 'rel', 'BS_ROTXA', -4),
+        (0x681, 'abs', '.', 15488),
+        (0x68c, 'abs', '.', 15568),
+        (0x693, 'rel', 'BS_MPUSHA', -4),
+        (0x69d, 'rel', 'BS_MPUSHA', -4),
+        (0x6ab, 'rel', 'BS_VIEWA', -4),
+        (0x6b6, 'rel', 'BS_ROTYA', -4),
+        (0x6be, 'rel', 'BS_MSETA', -4),
+        (0x6cf, 'rel', 'BS_MESHA', -4),
+        (0x6d7, 'rel', 'BS_MPOPA', -4),
+        (0x6e1, 'rel', 'BS_MPOPA', -4),
+        (0x6e7, 'abs', '.', 15228),
+        (0x6f3, 'abs', 'BS_SELOBJ', 924),
+        (0x6f9, 'abs', 'BS_SELOBJ', 936),
+        (0x711, 'abs', 'BS_SLOTS', 28),
+        (0x721, 'rel', 'BS_LOADFILE', -4),
+        (0x72b, 'rel', 'BS_MPUSHA', -4),
+        (0x733, 'abs', '.', 15472),
+        (0x73a, 'rel', 'BS_VIEWA', -4),
+        (0x743, 'rel', 'BS_ROTYA', -4),
+        (0x74b, 'abs', 'BS_SELOBJ', 924),
+        (0x760, 'abs', '.', 15252),
+        (0x76a, 'abs', '.', 15484),
+        (0x773, 'abs', '.', 15252),
+        (0x778, 'rel', 'BS_MSCALEA', -4),
+        (0x781, 'abs', '.', 15476),
+        (0x786, 'rel', 'BS_ROTXA', -4),
+        (0x78f, 'abs', '.', 15480),
+        (0x795, 'abs', '.', 15480),
+        (0x79b, 'abs', '.', 15480),
+        (0x7a0, 'rel', 'BS_MSCALEA', -4),
+        (0x7a8, 'rel', 'BS_MSETA', -4),
+        (0x7ad, 'abs', 'BS_SELOBJ', 924),
+        (0x7bd, 'abs', 'BS_SELFLAME', 12),
+        (0x7cc, 'rel', 'BS_MESHA', -4),
+        (0x7d4, 'rel', 'BS_MPOPA', -4),
+        (0x7eb, 'rel', 'BS_MPOPA', -4),
+        (0x7f0, 'rel', 'BS_MSETA', -4),
+        (0x7f8, 'abs', '.', 15448),
+        (0x808, 'abs', 'BS_FRAMEA', 0),
+        (0x821, 'abs', '.', 15452),
+        (0x82e, 'rel', 'BS_ROTZA', -4),
+        (0x833, 'abs', 'BS_FRAMEA', 0),
+        (0x83e, 'abs', '.', 15448),
+        (0x84d, 'abs', '.', 15456),
+        (0x85a, 'rel', 'BS_ROTYA', -4),
+        (0x85f, 'abs', 'BS_FRAMEA', 0),
+        (0x86d, 'abs', '.', 15448),
+        (0x873, 'abs', '.', 15456),
+        (0x880, 'rel', 'BS_ROTXA', -4),
+        (0x888, 'abs', 'BS_FRAMEA', 0),
+        (0x89f, 'abs', '.', 15448),
+        (0x8a5, 'abs', '.', 15460),
+        (0x8b7, 'rel', 'BS_VIEWA', -4),
+        (0x8c5, 'abs', '.', 15464),
+        (0x8d1, 'abs', '.', 15852),
+        (0x8de, 'abs', '.', 15852),
+        (0x8e5, 'abs', '.', 15860),
+        (0x8ea, 'abs', 'BS_RBDIR', 0),
+        (0x8ef, 'abs', 'BS_PATHFMT', 0),
+        (0x8f4, 'abs', '.', 144420),
+        (0x8f9, 'rel', 'BS_SPRINTF', -4),
+        (0x913, 'abs', '.', 144420),
+        (0x919, 'abs', 'BS_CREATEF', 0),
+        (0x925, 'abs', '.', 15872),
+        (0x937, 'abs', 'BS_SEEKF', 0),
+        (0x93e, 'abs', '.', 15856),
+        (0x94b, 'abs', 'BS_READF', 0),
+        (0x954, 'abs', '.', 15856),
+        (0x971, 'abs', 'BS_CLOSEF', 0),
+        (0x979, 'abs', 'BS_SELAHEAD', 0),
+        (0x98b, 'abs', 'BS_SELAHEAD', 0),
+        (0x991, 'abs', '.', 15256),
+        (0x997, 'abs', '.', 15244),
+        (0x99d, 'abs', '.', 15256),
+        (0x9a3, 'abs', '.', 15260),
+        (0x9a9, 'abs', 'BS_SELAHEAD', 0),
+        (0x9b2, 'abs', '.', 15244),
+        (0x9b8, 'abs', '.', 15256),
+        (0x9c0, 'abs', 'BS_SELCUR', -60),
+        (0x9ca, 'abs', 'BS_SELCUR', 0),
+        (0x9d2, 'abs', '.', 15228),
+        (0x9de, 'abs', 'BS_SELOBJ', 924),
+        (0x9ee, 'abs', '.', 15448),
+        (0x9f7, 'abs', '.', 15448),
+        (0xa0b, 'abs', '.', 15448),
+        (0xa17, 'rel', 'BS_SFX', -4),
+        (0xa1e, 'rel', 'BS_SFX', -4),
+        (0xa2a, 'abs', '.', 15468),
+        (0xa39, 'rel', 'BS_SFX', -4),
+        (0xa4c, 'rel', 'BS_SFX', -4),
+        (0xa57, 'abs', '.', 15264),
+        (0xa6e, 'abs', '.', 15380),
+        (0xa7b, 'abs', '.', 15388),
+        (0xa86, 'abs', '.', 15384),
+        (0xa99, 'abs', '.', 15444),
+        (0xaa3, 'abs', '.', 15400),
+        (0xab0, 'abs', '.', 15404),
+        (0xab6, 'abs', '.', 15408),
+        (0xac8, 'abs', '.', 15412),
+        (0xada, 'abs', '.', 15416),
+        (0xaf1, 'abs', '.', 15468),
+        (0xaf9, 'abs', '.', 15468),
+        (0xb03, 'abs', '.', 15424),
+        (0xb09, 'abs', '.', 15440),
+        (0xb0f, 'abs', '.', 15428),
+        (0xb15, 'abs', '.', 15440),
+        (0xb1b, 'abs', '.', 15440),
+        (0xb21, 'abs', '.', 15420),
+        (0xb29, 'abs', 'BS_SELCUR', 0),
+        (0xb32, 'abs', 'BS_SELCUR', -40),
+        (0xb3a, 'abs', 'BS_SELCUR', -40),
+        (0xb58, 'abs', 'BS_SELCUR', 0),
+        (0xb61, 'abs', 'BS_SELCUR', -36),
+        (0xb69, 'abs', 'BS_SELCUR', -36),
+        (0xb7d, 'abs', 'BS_G1PA', 0),
+        (0xb8f, 'abs', 'BS_SELSKY', 0),
+        (0xb99, 'abs', '.', 15384),
+        (0xb9f, 'abs', '.', 15396),
+        (0xba5, 'abs', 'BS_SELOBJ', 980),
+        (0xbb2, 'abs', 'BS_SELIN', 0),
+        (0xbbb, 'abs', 'BS_SELTICKS', 0),
+        (0xbcb, 'abs', 'BS_SELOBJ', 0),
+        (0xbd3, 'abs', '.', 15384),
+        (0xbd9, 'abs', '.', 15392),
+        (0xbe0, 'abs', 'BS_SELOBJ', 56),
+        (0xbf0, 'abs', 'BS_SELOBJ', 52),
+        (0xc12, 'abs', 'BS_SELOBJ', 52),
+        (0xc1e, 'abs', 'BS_SELCUR', 0),
+        (0xc2b, 'abs', '.', 15248),
+        (0xc31, 'abs', '.', 15256),
+        (0xc37, 'abs', '.', 15256),
+        (0xc42, 'abs', '.', 15272),
+        (0xc48, 'abs', '.', 15256),
+        (0xc4e, 'abs', '.', 15256),
+        (0xc56, 'abs', '.', 15276),
+        (0xc5c, 'abs', '.', 15256),
+        (0xc68, 'abs', '.', 15280),
+        (0xc6e, 'abs', '.', 15256),
+        (0xc7a, 'abs', '.', 15284),
+        (0xc80, 'abs', '.', 15256),
+        (0xca0, 'abs', 'BS_G1PA', 0),
+        (0xcb1, 'abs', '.', 16508),
+        (0xcc1, 'abs', '.', 15328),
+        (0xccf, 'abs', '.', 15320),
+        (0xcda, 'abs', '.', 15312),
+        (0xce3, 'abs', '.', 15312),
+        (0xceb, 'abs', '.', 222428),
+        (0xcfa, 'abs', '.', 15296),
+        (0xd1c, 'abs', 'BS_STATEA', 0),
+        (0xd25, 'abs', 'BS_STATEA', 0),
+        (0xd33, 'abs', '.', 15328),
+        (0xd42, 'abs', 'BS_SELOBJ', 180),
+        (0xd51, 'abs', '.', 15316),
+        (0xd5c, 'abs', '.', 15316),
+        (0xd62, 'abs', '.', 15316),
+        (0xd79, 'abs', '.', 15328),
+        (0xd82, 'abs', '.', 15328),
+        (0xd8c, 'abs', '.', 15316),
+        (0xd98, 'abs', '.', 15328),
+        (0xda1, 'abs', '.', 15232),
+        (0xda7, 'abs', '.', 15320),
+        (0xdae, 'abs', '.', 15312),
+        (0xdb7, 'abs', '.', 15312),
+        (0xdbd, 'abs', '.', 222428),
+        (0xdc9, 'abs', '.', 15296),
+        (0xdd4, 'abs', 'BS_PALRAMA', 0),
+        (0xe12, 'abs', '.', 15312),
+        (0xe23, 'abs', 'BS_PALRAMA', 640),
+        (0xe29, 'abs', 'BS_PALRAMA', 0),
+        (0xe5e, 'abs', '.', 15328),
+        (0xe67, 'abs', '.', 15312),
+        (0xea9, 'rel', 'BS_PALLOADA', -4),
+        (0xeb4, 'rel', 'BS_PALLOADA', -4),
+        (0xec1, 'abs', 'BS_MODEA', 0),
+        (0xed3, 'abs', 'BS_PALA', 0),
+        (0xee2, 'rel', 'BS_PALSETA', -4),
+        (0xef3, 'rel', 'BS_PALSETA', -4),
+        (0xefe, 'abs', 'BS_HSITE', 1),
+        (0xf04, 'abs', 'BS_HSITE', 5),
+        (0xf0a, 'abs', 'BS_SELMDLA', 0),
+        (0xf16, 'abs', 'BS_HDOFF', 0),
+        (0xf2d, 'abs', '.', 15344),
+        (0xf37, 'abs', '.', 15352),
+        (0xf43, 'abs', 'BS_SELCAM', 0),
+        (0xf4f, 'abs', 'BS_SELOBJ', 56),
+        (0xf67, 'abs', '.', 15256),
+        (0xf76, 'abs', '.', 15256),
+        (0xf7e, 'abs', '.', 15364),
+        (0xf84, 'abs', '.', 15368),
+        (0xf90, 'abs', '.', 15372),
+        (0xfa0, 'abs', '.', 15376),
+        (0xfc3, 'abs', '.', 15336),
+        (0xfd9, 'abs', '.', 15332),
+        (0xfee, 'abs', 'BS_COLTAB', 0),
+        (0x1005, 'abs', 'BS_POLYCOL', 0),
+        (0x100b, 'abs', '.', 15332),
+        (0x1023, 'abs', 'BS_COLTAB', 0),
+        (0x1049, 'abs', '.', 15296),
+        (0x106b, 'abs', '.', 15340),
+        (0x1072, 'abs', '.', 15336),
+        (0x1089, 'abs', '.', 15256),
+        (0x10be, 'abs', 'BS_SELCUR', -20),
+        (0x10c4, 'abs', '.', 15276),
+        (0x10ca, 'abs', 'BS_SELCUR', -20),
+        (0x10d0, 'abs', 'BS_SELCUR', -40),
+        (0x10d6, 'abs', '.', 15280),
+        (0x10dc, 'abs', 'BS_SELCUR', -40),
+        (0x10e2, 'abs', 'BS_SELCUR', -4),
+        (0x10e8, 'abs', '.', 15284),
+        (0x10ee, 'abs', 'BS_SELCUR', -4),
+        (0x1106, 'abs', '.', 15252),
+        (0x110e, 'abs', '.', 15272),
+        (0x1116, 'abs', '.', 15248),
+        (0x1123, 'abs', '.', 15272),
+        (0x113d, 'abs', 'BS_SELCUR', -20),
+        (0x1143, 'abs', '.', 15276),
+        (0x1149, 'abs', 'BS_SELCUR', -20),
+        (0x114f, 'abs', 'BS_SELCUR', -40),
+        (0x1155, 'abs', '.', 15280),
+        (0x115b, 'abs', 'BS_SELCUR', -40),
+        (0x1161, 'abs', 'BS_SELCUR', -4),
+        (0x1167, 'abs', '.', 15284),
+        (0x116d, 'abs', 'BS_SELCUR', -4),
+        (0x1185, 'abs', '.', 15252),
+        (0x118d, 'abs', '.', 15272),
+        (0x119a, 'abs', '.', 15248),
+        (0x11a2, 'abs', '.', 15248),
+        (0x11b0, 'abs', 'BS_SELCUR', 0),
+        (0x11ba, 'abs', '.', 144728),
+        (0x11c7, 'abs', '.', 144728),
+        (0x11cf, 'abs', 'BS_RBNAMES', 4),
+        (0x11d4, 'rel', 'BS_MALLOC', -4),
+        (0x11e4, 'abs', 'BS_RBNAMES', 0),
+        (0x11e9, 'abs', 'BS_RBDIR', 0),
+        (0x11ee, 'abs', 'BS_PATHFMT', 0),
+        (0x11f3, 'abs', '.', 144420),
+        (0x11f8, 'rel', 'BS_SPRINTF', -4),
+        (0x1200, 'abs', 'BS_RBMODE', 0),
+        (0x1205, 'abs', '.', 144420),
+        (0x120a, 'rel', 'BS_FOPEN', -4),
+        (0x121d, 'abs', 'BS_RBNAMES', 4),
+        (0x1223, 'rel', 'BS_FREAD', -4),
+        (0x122d, 'rel', 'BS_FCLOSE', -4),
+        (0x123d, 'abs', '.', 144680),
+        (0x1245, 'rel', 'BS_FREE', -4),
+        (0x1251, 'abs', '.', 16784),
+        (0x1259, 'abs', '.', 144700),
+        (0x1263, 'abs', 'BS_SLOTS', 20),
+        (0x1269, 'abs', '.', 16786),
+        (0x126e, 'abs', 'BS_SLOTS', 20),
+        (0x1274, 'abs', '.', 16784),
+        (0x127b, 'abs', '.', 16785),
+        (0x1283, 'abs', '.', 144716),
+        (0x128d, 'abs', 'BS_SLOTS', 36),
+        (0x1293, 'abs', '.', 16790),
+        (0x1298, 'abs', 'BS_SLOTS', 36),
+        (0x129e, 'abs', '.', 16785),
+        (0x12a7, 'abs', '.', 16784),
+        (0x12b0, 'abs', '.', 16784),
+        (0x12b7, 'abs', '.', 16786),
+        (0x12bd, 'abs', 'BS_SLOTS', 20),
+        (0x12c3, 'abs', '.', 16785),
+        (0x12cc, 'abs', '.', 16785),
+        (0x12d3, 'abs', '.', 16790),
+        (0x12d9, 'abs', 'BS_SLOTS', 36),
+        (0x12eb, 'rel', 'BS_SELINFOA', -4),
+        (0x12f6, 'abs', '.', 16794),
+        (0x1301, 'rel', 'BS_SELINFOA', -4),
+        (0x1315, 'rel', 'BS_SELINFOA', -4),
+        (0x1323, 'abs', '.', 16560),
+        (0x1338, 'rel', 'BS_TXTPOSA', -4),
+        (0x1344, 'rel', 'BS_TCLEARA', -4),
+        (0x1355, 'rel', 'BS_TBLOCKA', -4),
+        (0x1361, 'rel', 'BS_TXTPOSA', -4),
+        (0x136d, 'rel', 'BS_PRINT2A', -4),
+        (0x1384, 'rel', 'BS_SELQINFOA', -4),
+        (0x138a, 'abs', '.', 16794),
+        (0x1395, 'rel', 'BS_SELQINFOA', -4),
+        (0x13a9, 'rel', 'BS_SELQINFOA', -4),
+        (0x13b6, 'abs', '.', 16560),
+        (0x13bd, 'rel', 'BS_SELQINFOA', -4),
+        (0x13ca, 'abs', 'BS_QTXTY', 0),
+        (0x13d5, 'rel', 'BS_TXTPOSA', -4),
+        (0x13e1, 'rel', 'BS_TCLEARA', -4),
+        (0x13f2, 'rel', 'BS_TBLOCKA', -4),
+        (0x13fb, 'abs', 'BS_QTXTY', 0),
+        (0x1402, 'rel', 'BS_TXTPOSA', -4),
+        (0x140e, 'rel', 'BS_PRINT2A', -4),
+        (0x141e, 'abs', 'BS_QTXTY', 0),
+        (0x1427, 'abs', 'BS_QTXTX', 0),
+        (0x142c, 'rel', 'BS_TXTPOSA', -4),
+        (0x1435, 'rel', 'BS_PRINT2A', -4),
+        (0x143e, 'abs', '.', 16794),
+        (0x1453, 'abs', 'BS_FRAMEA', 0),
+        (0x1459, 'abs', 'BS_SELMODE', 0),
+        (0x1463, 'abs', 'BS_PRINT2A', 0),
+        (0x146f, 'abs', 'BS_PRINT1A', 0),
+        (0x147c, 'rel', 'BS_TXTPOSA', -4),
+        (0x148b, 'abs', '.', 16794),
+        (0x1499, 'rel', 'BS_TXTPOSA', -4),
+        (0x14a8, 'abs', '.', 16794),
+        (0x14b6, 'rel', 'BS_TXTPOSA', -4),
+        (0x14c5, 'abs', '.', 16794),
+        (0x14d3, 'rel', 'BS_TXTPOSA', -4),
+        (0x14e2, 'abs', '.', 16794),
+        (0x14f5, 'abs', 'BS_ROW', 0),
+        (0x1505, 'abs', '.', 142872),
+        (0x1540, 'abs', 'GAMEMODE', 0),
+        (0x1564, 'abs', 'GAMEMODE', 0),
+        (0x1591, 'abs', 'BS_TXTX', 0),
+        (0x15a2, 'abs', 'BS_TXTX', 0),
+        (0x15ac, 'abs', 'BS_PLANE', 6076),
+        (0x15c1, 'abs', 'BS_PLANE', 6084),
+        (0x15d6, 'abs', 'BS_PLANE', 8),
+        (0x15eb, 'abs', 'BS_PLANE', 16),
+        (0x1618, 'abs', 'GAMEMODE', 0),
+        (0x1621, 'abs', '.', 14823),
+        (0x163f, 'abs', '.', 16768),
+        (0x1647, 'abs', 'BS_FRX', 0),
+        (0x164d, 'abs', '.', 16776),
+        (0x1655, 'abs', 'BS_FRX', 8),
+        (0x165b, 'abs', 'BS_PALA', 0),
+        (0x1668, 'rel', 'BS_PALFIXA', -4),
+        (0x1671, 'rel', 'BS_PALSETA', -4),
+        (0x1679, 'rel', 'BS_PALRETA', -4),
+        (0x1689, 'abs', '.', 15228),
+        (0x1690, 'abs', 'BS_COL0', 0),
+        (0x169a, 'abs', 'BS_COL1', 0),
+        (0x16a0, 'abs', '.', 15240),
+        (0x16a8, 'abs', '.', 15236),
+        (0x16b5, 'abs', '.', 15232),
+        (0x16d2, 'abs', 'BS_MFRAMEA', 0),
+        (0x16d9, 'abs', '.', 14839),
+        (0x16fa, 'rel', 'BS_RPARTA', -4),
+        (0x1700, 'abs', 'BS_CPUA', 0),
+        (0x1705, 'abs', '.', 178804),
+        (0x1715, 'abs', 'BS_BSSA', 0),
+        (0x171a, 'abs', '.', 182412),
+        (0x171f, 'abs', 'BS_AIDW', 0),
+        (0x172a, 'abs', 'BS_FXA', 0),
+        (0x172f, 'abs', '.', 277880),
+        (0x173c, 'abs', 'BS_FX2A', 0),
+        (0x1741, 'abs', '.', 278744),
+        (0x174f, 'abs', '.', 183000),
+        (0x1756, 'abs', '.', 182900),
+        (0x175b, 'abs', 'BS_CPUA', 0),
+        (0x176b, 'abs', '.', 184436),
+        (0x1770, 'abs', 'BS_BSSA', 0),
+        (0x1775, 'abs', 'BS_AIDW', 0),
+        (0x1781, 'abs', 'BS_RFLAG', 0),
+        (0x1787, 'abs', 'SEMUTE', 0),
+        (0x178d, 'abs', 'BS_ZMODA', 0),
+        (0x1793, 'abs', 'SEMUTE', 0),
+        (0x179c, 'rel', 'BS_MPUSHA', -4),
+        (0x17a1, 'abs', '.', 14891),
+        (0x17a7, 'abs', 'BS_CPUA', 100),
+        (0x17af, 'abs', '.', 14903),
+        (0x17ba, 'rel', 'BS_MSCALEA', -4),
+        (0x17c2, 'abs', 'BS_MATA', 0),
+        (0x17d2, 'abs', 'BS_MATA', 0),
+        (0x17d7, 'abs', '.', 182364),
+        (0x17e6, 'abs', '.', 16826),
+        (0x17ec, 'abs', 'BS_CPUA', 0),
+        (0x1813, 'abs', 'BS_ZMODA', 0),
+        (0x1828, 'abs', '.', 16826),
+        (0x182e, 'rel', 'BS_MPOPA', -4),
+        (0x1834, 'abs', 'BS_ZMODA', 0),
+        (0x183a, 'abs', 'SEMUTE', 0),
+        (0x1840, 'abs', 'BS_RFLAG', 0),
+        (0x1845, 'abs', '.', 278744),
+        (0x184a, 'abs', 'BS_FX2A', 0),
+        (0x1857, 'abs', '.', 277880),
+        (0x185c, 'abs', 'BS_FXA', 0),
+        (0x186c, 'abs', '.', 182412),
+        (0x1871, 'abs', 'BS_BSSA', 0),
+        (0x1876, 'abs', 'BS_AIDW', 0),
+        (0x1881, 'abs', '.', 178804),
+        (0x1886, 'abs', 'BS_CPUA', 0),
+        (0x189e, 'rel', 'BS_RPARTA', -4),
+        (0x18a4, 'abs', 'BS_OBJA', 0),
+        (0x18a9, 'abs', '.', 178804),
+        (0x18b9, 'abs', 'BS_BSSA', 0),
+        (0x18be, 'abs', '.', 182412),
+        (0x18c3, 'abs', 'BS_AIDW', 0),
+        (0x18ce, 'abs', 'BS_FXA', 0),
+        (0x18d3, 'abs', '.', 277880),
+        (0x18e0, 'abs', 'BS_FX2A', 0),
+        (0x18e5, 'abs', '.', 278744),
+        (0x18f3, 'abs', '.', 180440),
+        (0x18fa, 'abs', '.', 180340),
+        (0x18ff, 'abs', 'BS_OBJA', 0),
+        (0x190f, 'abs', '.', 181876),
+        (0x1914, 'abs', 'BS_BSSA', 0),
+        (0x1919, 'abs', 'BS_AIDW', 0),
+        (0x1925, 'abs', 'BS_RFLAG', 0),
+        (0x192b, 'abs', 'SEMUTE', 0),
+        (0x1931, 'abs', 'BS_ZMODA', 0),
+        (0x1937, 'abs', 'SEMUTE', 0),
+        (0x1940, 'rel', 'BS_MPUSHA', -4),
+        (0x1945, 'abs', '.', 15068),
+        (0x194b, 'abs', 'BS_OBJA', 100),
+        (0x1953, 'abs', '.', 15080),
+        (0x195e, 'rel', 'BS_MSCALEA', -4),
+        (0x1966, 'abs', 'BS_MATA', 0),
+        (0x1976, 'abs', 'BS_MATA', 0),
+        (0x197b, 'abs', '.', 182364),
+        (0x198a, 'abs', '.', 16826),
+        (0x1990, 'abs', 'BS_OBJA', 0),
+        (0x19b7, 'abs', 'BS_ZMODA', 0),
+        (0x19bc, 'rel', 'BS_ZDRAWA', -4),
+        (0x19ca, 'abs', '.', 16826),
+        (0x19d0, 'rel', 'BS_MPOPA', -4),
+        (0x19d6, 'abs', 'BS_ZMODA', 0),
+        (0x19dc, 'abs', 'SEMUTE', 0),
+        (0x19e2, 'abs', 'BS_RFLAG', 0),
+        (0x19e7, 'abs', '.', 278744),
+        (0x19ec, 'abs', 'BS_FX2A', 0),
+        (0x19f9, 'abs', '.', 277880),
+        (0x19fe, 'abs', 'BS_FXA', 0),
+        (0x1a0e, 'abs', '.', 182412),
+        (0x1a13, 'abs', 'BS_BSSA', 0),
+        (0x1a18, 'abs', 'BS_AIDW', 0),
+        (0x1a23, 'abs', '.', 178804),
+        (0x1a28, 'abs', 'BS_OBJA', 0),
+        (0x1a40, 'rel', 'BS_RPARTA', -4),
+        (0x1a46, 'abs', 'BS_OBJA', 0),
+        (0x1a4b, 'abs', '.', 178804),
+        (0x1a5b, 'abs', 'BS_BSSA', 0),
+        (0x1a60, 'abs', '.', 182412),
+        (0x1a65, 'abs', 'BS_AIDW', 0),
+        (0x1a70, 'abs', 'BS_FXA', 0),
+        (0x1a75, 'abs', '.', 277880),
+        (0x1a82, 'abs', 'BS_FX2A', 0),
+        (0x1a87, 'abs', '.', 278744),
+        (0x1a95, 'abs', '.', 180440),
+        (0x1a9c, 'abs', '.', 180340),
+        (0x1aa1, 'abs', 'BS_OBJA', 0),
+        (0x1ab1, 'abs', '.', 181876),
+        (0x1ab6, 'abs', 'BS_BSSA', 0),
+        (0x1abb, 'abs', 'BS_AIDW', 0),
+        (0x1ac7, 'abs', 'BS_RFLAG', 0),
+        (0x1acd, 'abs', 'SEMUTE', 0),
+        (0x1ad3, 'abs', 'BS_ZMODA', 0),
+        (0x1ad9, 'abs', 'SEMUTE', 0),
+        (0x1ae2, 'rel', 'BS_MPUSHA', -4),
+        (0x1ae7, 'abs', '.', 15092),
+        (0x1aed, 'abs', 'BS_OBJA', 100),
+        (0x1af5, 'abs', '.', 15080),
+        (0x1b00, 'rel', 'BS_MSCALEA', -4),
+        (0x1b08, 'abs', 'BS_MATA', 0),
+        (0x1b18, 'abs', 'BS_MATA', 0),
+        (0x1b1d, 'abs', '.', 182364),
+        (0x1b2c, 'abs', '.', 16826),
+        (0x1b32, 'abs', 'BS_OBJA', 0),
+        (0x1b59, 'abs', 'BS_ZMODA', 0),
+        (0x1b5e, 'rel', 'BS_ZDRAWA', -4),
+        (0x1b6e, 'abs', '.', 16826),
+        (0x1b74, 'rel', 'BS_MPOPA', -4),
+        (0x1b7a, 'abs', 'BS_ZMODA', 0),
+        (0x1b80, 'abs', 'SEMUTE', 0),
+        (0x1b86, 'abs', 'BS_RFLAG', 0),
+        (0x1b8b, 'abs', '.', 278744),
+        (0x1b90, 'abs', 'BS_FX2A', 0),
+        (0x1b9d, 'abs', '.', 277880),
+        (0x1ba2, 'abs', 'BS_FXA', 0),
+        (0x1bb2, 'abs', '.', 182412),
+        (0x1bb7, 'abs', 'BS_BSSA', 0),
+        (0x1bbc, 'abs', 'BS_AIDW', 0),
+        (0x1bc7, 'abs', '.', 178804),
+        (0x1bcc, 'abs', 'BS_OBJA', 0),
+        (0x1bef, 'rel', 'BS_MPUSHA', -4),
+        (0x1bfd, 'rel', 'BS_VIEWA', -4),
+        (0x1c0a, 'rel', 'BS_MPOPA', -4),
+        (0x1c17, 'abs', '.', 14839),
+        (0x1c33, 'rel', 'BS_MPUSHA', -4),
+        (0x1c41, 'rel', 'BS_VIEWA', -4),
+        (0x1c4a, 'abs', '.', 16480),
+        (0x1c61, 'abs', '.', 16480),
+        (0x1c67, 'rel', 'BS_MPOPA', -4),
+        (0x1c74, 'abs', '.', 16826),
+        (0x1c82, 'rel', 'BS_IDENTA', -4),
+        (0x1c8a, 'abs', '.', 182364),
+        (0x1c90, 'abs', 'BS_MATA', 0),
+        (0x1ca2, 'abs', '.', 16826),
+        (0x1caa, 'abs', 'BS_LIGHTA', 0),
+        (0x1caf, 'rel', 'BS_SHADEA', -4),
+        (0x1cb4, 'rel', 'BS_NOSHADEA', -4),
+        (0x1cba, 'abs', '.', 16826),
+        (0x1cc3, 'abs', 'BS_ZTIMA', 0),
+        (0x1ccc, 'rel', 'BS_ZSHADEA', -4),
+        (0x1cd1, 'rel', 'BS_ZNOSHADEA', -4),
+        (0x1cd6, 'abs', 'BS_G1PA', 0),
+        (0x1ceb, 'abs', 'BS_NAMEA', 0),
+        (0x1cf1, 'abs', '.', 14741),
+        (0x1cf7, 'abs', '.', 14755),
+        (0x1cfe, 'abs', '.', 14827),
+        (0x1d08, 'abs', '.', 14827),
+        (0x1d0e, 'abs', 'BS_RBMODE', 0),
+        (0x1d13, 'abs', '.', 14766),
+        (0x1d18, 'rel', 'BS_FOPEN', -4),
+        (0x1d2b, 'abs', '.', 14823),
+        (0x1d30, 'rel', 'BS_FREAD', -4),
+        (0x1d39, 'rel', 'BS_FCLOSE', -4),
+        (0x1d42, 'abs', '.', 14823),
+        (0x1d4b, 'abs', '.', 14823),
+        (0x1d57, 'abs', 'BS_WBMODE', 0),
+        (0x1d5c, 'abs', '.', 14766),
+        (0x1d61, 'rel', 'BS_FOPEN', -4),
+        (0x1d74, 'abs', '.', 14823),
+        (0x1d79, 'rel', 'BS_FWRITE', -4),
+        (0x1d82, 'rel', 'BS_FCLOSE', -4),
+        (0x1d8e, 'abs', 'BS_OBJA', 264),
+        (0x1d94, 'abs', '.', 15120),
+        (0x1d9a, 'abs', 'BS_READYA', 0),
+        (0x1da7, 'abs', 'BS_STAGEA', 0),
+        (0x1db0, 'abs', 'BS_ZTIMA', 0),
+        (0x1dbc, 'abs', 'BS_BSSA', 0),
+        (0x1dc2, 'abs', '.', 16822),
+        (0x1dca, 'abs', '.', 148036),
+        (0x1dd0, 'abs', 'BS_AILASER', 0),
+        (0x1dd9, 'abs', '.', 15124),
+        (0x1dec, 'abs', 'BS_OBJA', 264),
+        (0x1df6, 'abs', '.', 15124),
+        (0x1e00, 'abs', '.', 15124),
+        (0x1e09, 'abs', 'BS_OBJA', 8),
+        (0x1e0f, 'abs', 'BS_CPUA', 8),
+        (0x1e15, 'abs', 'BS_CPUA', 16),
+        (0x1e1b, 'abs', 'BS_OBJA', 16),
+        (0x1e23, 'abs', '.', 15464),
+        (0x1e29, 'abs', '.', 15128),
+        (0x1e2e, 'abs', '.', 15128),
+        (0x1e35, 'abs', 'BS_OBJA', 388),
+        (0x1e58, 'abs', '.', 15124),
+        (0x1e63, 'abs', 'BS_OBJA', 388),
+        (0x1e6a, 'abs', '.', 15124),
+        (0x1e75, 'abs', 'BS_STATEA', 0),
+        (0x1e81, 'abs', '.', 14831),
+        (0x1e8b, 'abs', '.', 14835),
+        (0x1e95, 'abs', 'BS_DIFF', 0),
+        (0x1e9e, 'abs', 'GAMEMODE', 0),
+        (0x1ea7, 'abs', '.', 14831),
+        (0x1eb1, 'abs', 'BS_STATEA', 0),
+        (0x1eba, 'abs', 'BS_STAGEA', 0),
+        (0x1ec3, 'abs', '.', 14835),
+        (0x1ecc, 'abs', 'BS_STATEA', 0),
+        (0x1ed8, 'abs', 'BS_SCENEA', 0),
+        (0x1efe, 'abs', 'BS_READYA', 0),
+        (0x1f07, 'abs', '.', 14923),
+        (0x1f10, 'abs', '.', 14923),
+        (0x1f18, 'abs', 'BS_CPUA', 100),
+        (0x1f28, 'abs', 'BS_READYA', 0),
+        (0x1f31, 'abs', '.', 14923),
+        (0x1f37, 'abs', 'BS_CPUA', 0),
+        (0x1f3c, 'abs', '.', 182900),
+        (0x1f4c, 'abs', 'BS_BSSA', 0),
+        (0x1f51, 'abs', '.', 184436),
+        (0x1f56, 'abs', 'BS_AIDW', 0),
+        (0x1f62, 'abs', '.', 15228),
+        (0x1f70, 'abs', 'BS_OBJA', 388),
+        (0x1f76, 'abs', 'BS_ECBLKA', 26),
+        (0x1f7f, 'abs', 'BS_LOGOJ', 0),
+        (0x1f8b, 'abs', 'BS_LOGOZ', -136),
+        (0x1fb1, 'abs', 'BS_ARTPOOL2', 0),
+        (0x1fc2, 'abs', 'BS_ARTPOOL', 0),
+        (0x1fc8, 'abs', 'BS_ARTEND', -128),
+        (0x1fef, 'abs', '.', 184924),
+        (0x2005, 'abs', '.', 14855),
+        (0x2010, 'abs', '.', 14855),
+        (0x201d, 'abs', '.', 14859),
+        (0x2025, 'abs', '.', 203612),
+        (0x202a, 'abs', 'BS_ARTPOOL', 0),
+        (0x2039, 'abs', 'BS_ARTPOOL', 0),
+        (0x2054, 'abs', '.', 184924),
+        (0x2061, 'abs', '.', 14863),
+        (0x2067, 'abs', 'BS_ARTCOUNT', 0),
+        (0x206d, 'abs', '.', 14867),
+        (0x2076, 'abs', 'BS_ARTCOUNT', 0),
+        (0x207c, 'abs', '.', 14859),
+        (0x2083, 'abs', '.', 14863),
+        (0x2090, 'abs', '.', 14839),
+        (0x20a2, 'abs', '.', 277724),
+        (0x20ca, 'abs', '.', 14859),
+        (0x20d3, 'abs', '.', 14867),
+        (0x20d8, 'abs', 'BS_ARTCOUNT', 0),
+        (0x20de, 'abs', '.', 14859),
+        (0x20e7, 'abs', '.', 16834),
+        (0x20f1, 'abs', 'BS_PALRAMA', 0),
+        (0x20f6, 'abs', '.', 228572),
+        (0x2103, 'abs', '.', 16834),
+        (0x210c, 'abs', '.', 16834),
+        (0x2116, 'abs', '.', 228572),
+        (0x211b, 'abs', 'BS_PALRAMA', 0),
+        (0x2128, 'abs', '.', 16834),
+        (0x2133, 'abs', '.', 16842),
+        (0x2140, 'rel', 'BS_MALLOC', -4),
+        (0x2148, 'abs', '.', 16842),
+        (0x2152, 'abs', '.', 16842),
+        (0x2157, 'abs', 'BS_FCBUF', 0),
+        (0x2163, 'abs', 'BS_FLDBUF', 0),
+        (0x216f, 'abs', 'BS_MTSELMEM', 0),
+        (0x217b, 'abs', 'BS_SEGA', 0),
+        (0x2180, 'abs', '.', 16862),
+        (0x2185, 'abs', 'BS_GLOW1', 0),
+        (0x218a, 'abs', '.', 16850),
+        (0x218f, 'abs', 'BS_GLOW2', 0),
+        (0x2194, 'abs', '.', 16854),
+        (0x2199, 'abs', 'BS_GLOW3', 0),
+        (0x219e, 'abs', '.', 16858),
+        (0x21a4, 'abs', '.', 16846),
+        (0x21ad, 'abs', '.', 16846),
+        (0x21b8, 'abs', '.', 16842),
+        (0x21bd, 'abs', 'BS_FCBUF', 0),
+        (0x21c9, 'abs', 'BS_FLDBUF', 0),
+        (0x21d5, 'abs', 'BS_MTSELMEM', 0),
+        (0x21e1, 'abs', '.', 16862),
+        (0x21e6, 'abs', 'BS_SEGA', 0),
+        (0x21eb, 'abs', '.', 16850),
+        (0x21f0, 'abs', 'BS_GLOW1', 0),
+        (0x21f5, 'abs', '.', 16854),
+        (0x21fa, 'abs', 'BS_GLOW2', 0),
+        (0x21ff, 'abs', '.', 16858),
+        (0x2204, 'abs', 'BS_GLOW3', 0),
+        (0x2209, 'abs', '.', 16838),
+        (0x220e, 'abs', 'BS_SCNNOW', 0),
+        (0x2214, 'abs', '.', 16846),
+        (0x2228, 'abs', '.', 16870),
+        (0x222e, 'rel', 'BS_LOADTEX', -4),
+        (0x2246, 'abs', '.', 14823),
+        (0x224d, 'abs', '.', 8754),
+        (0x225b, 'abs', '.', 14823),
+        (0x2262, 'abs', '.', 8758),
+        (0x2269, 'abs', 'GAMEMODE', 0),
+        (0x2272, 'abs', 'BS_DIFF', 0),
+        (0x227b, 'abs', '.', 14831),
+        (0x2283, 'abs', 'BS_LOSSA', 0),
+        (0x2289, 'abs', '.', 14831),
+        (0x2294, 'abs', 'BS_STATEA', 0),
+        (0x22b3, 'abs', 'BS_CPUA', 100),
+        (0x22bc, 'abs', '.', 14823),
+        (0x22c3, 'abs', '.', 8762),
+        (0x22c8, 'abs', '.', 14823),
+        (0x22d4, 'abs', '.', 14839),
+        (0x22de, 'abs', '.', 14843),
+        (0x22e9, 'abs', '.', 14835),
+        (0x22f2, 'abs', '.', 14835),
+        (0x230e, 'abs', '.', 14823),
+        (0x2315, 'abs', '.', 8766),
+        (0x231a, 'abs', '.', 14823),
+        (0x2324, 'abs', 'BS_SCNNOW', 0),
+        (0x2329, 'abs', '.', 16838),
+        (0x232e, 'abs', '.', 16870),
+        (0x2333, 'abs', '.', 16866),
+        (0x233e, 'abs', '.', 14839),
+        (0x2348, 'abs', '.', 14843),
+        (0x2352, 'abs', 'BS_STATEA', 0),
+        (0x235d, 'abs', 'BS_STATEA', 0),
+        (0x2368, 'abs', '.', 14839),
+        (0x2370, 'rel', 'BS_REPTEXTA', -4),
+        (0x2377, 'abs', '.', 14839),
+        (0x237f, 'rel', 'BS_REPLOGICA', -4),
+        (0x2386, 'abs', '.', 14843),
+        (0x2397, 'rel', 'BS_SFX', -4),
+        (0x23a0, 'abs', '.', 14847),
+        (0x23aa, 'abs', '.', 14851),
+        (0x23b6, 'abs', '.', 14839),
+        (0x23c3, 'rel', 'BS_PALLOADA', -4),
+        (0x23d1, 'rel', 'BS_PALLOADA', -4),
+        (0x23df, 'rel', 'BS_PALLOADA', -4),
+        (0x23ed, 'rel', 'BS_PALLOADA', -4),
+        (0x23f5, 'abs', '.', 14839),
+        (0x23fc, 'abs', '.', 15232),
+        (0x2406, 'rel', 'BS_PALLOADA', -4),
+        (0x2415, 'rel', 'BS_PALLOADA', -4),
+        (0x241f, 'rel', 'BS_TCLRALL', -4),
+        (0x2427, 'rel', 'BS_TRESET', -4),
+        (0x242d, 'abs', '.', 14843),
+        (0x2437, 'rel', 'BS_TCLRALL', -4),
+        (0x243f, 'rel', 'BS_TRESET', -4),
+        (0x2445, 'abs', '.', 14875),
+        (0x244b, 'abs', '.', 14871),
+        (0x2450, 'rel', 'BS_TXTPOSA', -4),
+        (0x2458, 'abs', '.', 14777),
+        (0x245d, 'rel', 'BS_PRINTBIG', -4),
+        (0x2466, 'abs', '.', 14843),
+        (0x2476, 'abs', '.', 14839),
+        (0x247f, 'abs', '.', 14887),
+        (0x2486, 'abs', '.', 14879),
+        (0x248b, 'rel', 'BS_TXTPOSA', -4),
+        (0x2497, 'abs', '.', 16560),
+        (0x24a2, 'abs', '.', 277724),
+        (0x24a7, 'rel', 'BS_TBLOCKA', -4),
+        (0x24b0, 'abs', '.', 14851),
+        (0x24b9, 'abs', '.', 14843),
+        (0x24bf, 'abs', '.', 14815),
+        (0x24c5, 'abs', '.', 14819),
+        (0x24d7, 'abs', 'BS_G1PA', 0),
+        (0x24dc, 'abs', '.', 14839),
+        (0x24e1, 'abs', 'BS_G1PA', 0),
+        (0x24ea, 'rel', 'BS_REPMODELA', -4),
+        (0x24f3, 'abs', 'BS_G1PA', 0),
+        (0x24fb, 'abs', '.', 14843),
+        (0x2515, 'abs', '.', 14919),
+        (0x251b, 'abs', '.', 14915),
+        (0x2520, 'rel', 'BS_TXTPOSA', -4),
+        (0x2530, 'abs', '.', 14790),
+        (0x2535, 'rel', 'BS_PRINTBIG', -4),
+        (0x2543, 'rel', 'BS_TCLEARA', -4),
+        (0x254b, 'abs', 'BS_PADEDGE', 0),
+        (0x2556, 'abs', 'ACCEPT1', 0),
+        (0x255c, 'abs', 'CAMERA1', 0),
+        (0x256a, 'abs', '.', 14851),
+        (0x2573, 'abs', '.', 14847),
+        (0x2578, 'abs', '.', 14847),
+        (0x2584, 'abs', '.', 14851),
+        (0x258c, 'rel', 'BS_SFX', -4),
+        (0x259b, 'abs', '.', 14843),
+        (0x25a4, 'rel', 'BS_TCLRALL', -4),
+        (0x25ac, 'rel', 'BS_TRESET', -4),
+        (0x25bd, 'rel', 'BS_FADE', -4),
+        (0x25c6, 'abs', 'BS_REPCNT', 0),
+        (0x25d5, 'rel', 'BS_SCNEND', -4),
+        (0x25de, 'abs', '.', 14843),
+        (0x25e7, 'abs', '.', 14839),
+        (0x25ed, 'abs', '.', 14839),
+        (0x25f7, 'abs', 'BS_STATEA', 0),
+        (0x260d, 'abs', '.', 16866),
+        (0x2612, 'rel', 'BS_LOADTEX', -4),
+        (0x261c, 'abs', 'BS_SCENEA', 0),
+        (0x2624, 'abs', 'BS_EVA', 0),
+        (0x262e, 'abs', 'BS_STATEA', 0),
+        (0x2639, 'abs', 'BS_IDA', 0),
+        (0x2642, 'rel', 'BS_LDXA', -4),
+        (0x2647, 'rel', 'BS_LDA', -4),
+        (0x264d, 'abs', 'BS_IDA', 0),
+        (0x2654, 'rel', 'BS_DRSA', -4),
+        (0x265a, 'abs8', 'DR_FLAG', 0),
+        (0x265e, 'rel', 'BS_DRJA', -4),
+        (0x2663, 'rel', 'BS_DRFA', -4),
+        (0x2668, 'abs', 'BS_IDA', 0),
+        (0x2671, 'rel', 'BS_LDXA', -4),
+        (0x2676, 'rel', 'BS_C2A', -4),
+        (0x267b, 'abs', 'BS_IDA', 0),
+        (0x2689, 'abs', 'BS_MDLA', 0),
+        (0x268d, 'abs', 'BS_JAGA', 0),
+        (0x2695, 'abs', 'BS_MDLA', 0),
+        (0x2699, 'abs', 'BS_ZGA', 0),
+        (0x26a1, 'abs', 'BS_PHASEA', 0),
+        (0x26a8, 'rel', 'BS_END1A', -4),
+        (0x26ad, 'rel', 'BS_ENDA', -4),
+        (0x26b2, 'abs', 'BS_G1PA', 0),
+        (0x26bc, 'abs', '.', 15052),
+        (0x26c2, 'abs', 'BS_PHASEA', 0),
+        (0x26cb, 'abs', 'BS_G1PA', 0),
+        (0x26d4, 'rel', 'BS_ENDA', -4),
+        (0x26d9, 'abs', '.', 15052),
+        (0x26e2, 'abs', 'BS_G1PA', 0),
+        (0x26e8, 'abs', 'BS_PHASEA', 0),
+        (0x26ef, 'rel', 'BS_END1A', -4),
+        (0x26f5, 'rel', 'BS_ENDEA', -4),
+        (0x26fa, 'rel', 'BS_ENDEA', -4),
+        (0x2700, 'abs', 'BS_IDA', 0),
+        (0x2708, 'rel', 'BS_PH0A', -4),
+        (0x270e, 'abs', 'BS_ESTEPA', 0),
+        (0x271a, 'abs', 'BS_ESTEPA', 0),
+        (0x2720, 'abs', 'BS_TIMEA', 0),
+        (0x272a, 'abs', 'BS_ESTEPA', 0),
+        (0x2736, 'abs', 'BS_ESTEPA', 0),
+        (0x273c, 'abs', 'BS_BSSA', 0),
+        (0x2742, 'abs', '.', 16822),
+        (0x274a, 'abs', '.', 148036),
+        (0x274f, 'abs', 'BS_AILASER', 0),
+        (0x2755, 'abs', 'BS_TIMEA', 0),
+        (0x2762, 'abs', 'BS_TIMEA', 0),
+        (0x276f, 'abs', 'BS_G1PA', 0),
+        (0x2781, 'abs', 'BS_TIMEA', 0),
+        (0x278e, 'abs', 'BS_OBJA', 376),
+        (0x2798, 'abs', 'BS_OBJA', 376),
+        (0x27a0, 'abs', 'BS_TIMEA', 0),
+        (0x27ac, 'abs', '.', 15028),
+        (0x27b5, 'abs', '.', 15028),
+        (0x27bc, 'abs', '.', 15040),
+        (0x27c0, 'abs', 'BS_SPDA', 0),
+        (0x27c6, 'abs', 'BS_SPDA', 0),
+        (0x27cc, 'abs', '.', 15036),
+        (0x27d2, 'abs', 'BS_SPDA', 0),
+        (0x27d8, 'abs', '.', 15044),
+        (0x27de, 'abs', 'BS_SPDA', 0),
+        (0x27e4, 'abs', '.', 15048),
+        (0x27ea, 'abs', '.', 15048),
+        (0x27f3, 'abs', '.', 15048),
+        (0x27ff, 'abs', 'BS_OBJA', 512),
+        (0x2828, 'abs', 'BS_TIMEA', 0),
+        (0x2836, 'rel', 'BS_PH0A', -4),
+        (0x2841, 'abs', '.', 15056),
+        (0x2848, 'abs', '.', 14964),
+        (0x2852, 'abs', '.', 15008),
+        (0x285d, 'abs', 'BS_OBJA', 12),
+        (0x2863, 'abs', 'BS_OBJA', 16),
+        (0x2869, 'abs', 'BS_OBJA', 12),
+        (0x286f, 'abs', '.', 14972),
+        (0x2875, 'abs', 'BS_OBJA', 12),
+        (0x287b, 'abs', 'BS_OBJA', 16),
+        (0x2881, 'abs', '.', 14976),
+        (0x2887, 'abs', 'BS_OBJA', 16),
+        (0x288c, 'rel', 'BS_PH0A', -4),
+        (0x2892, 'abs', 'BS_OBJA', 16),
+        (0x2898, 'abs', 'BS_OBJA', 12),
+        (0x289f, 'abs', '.', 15008),
+        (0x28a8, 'abs', 'BS_EVA', 0),
+        (0x28b4, 'abs', '.', 15008),
+        (0x28ba, 'abs', '.', 15008),
+        (0x28c4, 'abs', 'BS_EVA', 0),
+        (0x28cb, 'abs', '.', 16814),
+        (0x28d2, 'abs', '.', 15056),
+        (0x28db, 'abs', '.', 14964),
+        (0x28e4, 'abs', '.', 14964),
+        (0x28ef, 'abs', 'BS_OBJA', 368),
+        (0x28f8, 'abs', 'BS_OBJA', 380),
+        (0x2901, 'abs', 'BS_OBJA', 376),
+        (0x291b, 'abs', '.', 15056),
+        (0x2922, 'abs', '.', 14964),
+        (0x2932, 'abs', '.', 14964),
+        (0x2939, 'abs', 'BS_OBJA', 176),
+        (0x293e, 'abs', '.', 16912),
+        (0x294c, 'abs', 'BS_OBJA', 376),
+        (0x2952, 'abs', '.', 16992),
+        (0x2958, 'abs', 'BS_OBJA', 420),
+        (0x295e, 'abs', '.', 16994),
+        (0x2965, 'abs', 'BS_OBJA', 376),
+        (0x296c, 'rel', 'BS_PH0A', -4),
+        (0x2972, 'abs', '.', 16992),
+        (0x2978, 'abs', 'BS_OBJA', 376),
+        (0x297e, 'abs', '.', 16994),
+        (0x2984, 'abs', 'BS_OBJA', 420),
+        (0x2989, 'abs', '.', 16912),
+        (0x298e, 'abs', 'BS_OBJA', 176),
+        (0x299d, 'abs', '.', 14964),
+        (0x29a9, 'abs', '.', 15056),
+        (0x29b0, 'abs', '.', 14964),
+        (0x29ba, 'abs', 'BS_ESTEPA', 0),
+        (0x29c0, 'abs', 'BS_TIMEA', 0),
+        (0x29cc, 'abs', 'BS_TIMEA', 0),
+        (0x29d5, 'rel', 'BS_PH0A', -4),
+        (0x29db, 'abs', 'BS_TIMEA', 0),
+        (0x29e6, 'abs', '.', 14968),
+        (0x29f2, 'abs', '.', 15056),
+        (0x29f9, 'abs', '.', 14964),
+        (0x2a03, 'abs', '.', 15008),
+        (0x2a0d, 'rel', 'BS_PH0A', -4),
+        (0x2a13, 'abs', '.', 15028),
+        (0x2a1a, 'rel', 'BS_WALLA', -4),
+        (0x2a20, 'abs', '.', 15032),
+        (0x2a27, 'abs', '.', 15028),
+        (0x2a30, 'abs', '.', 15028),
+        (0x2a38, 'abs', '.', 15040),
+        (0x2a3e, 'abs', '.', 15036),
+        (0x2a49, 'abs', 'BS_IDA', 0),
+        (0x2a54, 'abs', 'BS_SCANBASE', 0),
+        (0x2a59, 'rel', 'BS_SCANA', -4),
+        (0x2a5e, 'abs', 'BS_TIMEA', 0),
+        (0x2a66, 'abs', '.', 15024),
+        (0x2a6c, 'abs', '.', 15024),
+        (0x2a72, 'abs', '.', 15012),
+        (0x2a78, 'abs', 'BS_OBJA', 16),
+        (0x2a7e, 'abs', '.', 15020),
+        (0x2a84, 'abs', '.', 16904),
+        (0x2a8a, 'abs', 'BS_OBJA', 12),
+        (0x2a90, 'abs', '.', 15016),
+        (0x2a96, 'abs', '.', 16900),
+        (0x2a9b, 'abs', 'BS_OBJA', 8),
+        (0x2aa0, 'abs', '.', 16896),
+        (0x2aa6, 'abs8', 'SCAN_SLOT', 0),
+        (0x2aa7, 'abs', '.', 16880),
+        (0x2aac, 'rel', 'BS_FOUNDA', -4),
+        (0x2ab2, 'abs', 'BS_IDA', 0),
+        (0x2aba, 'rel', 'BS_VIEWA', -4),
+        (0x2ac0, 'abs', '.', 14948),
+        (0x2ac6, 'abs', 'BS_IDA', 0),
+        (0x2acf, 'abs', 'BS_TIMEA', 0),
+        (0x2adb, 'abs', 'BS_TIMEA', 0),
+        (0x2ae3, 'abs', '.', 14952),
+        (0x2aea, 'abs', '.', 14956),
+        (0x2af2, 'abs', 'BS_ESTEPA', 0),
+        (0x2b02, 'abs', 'BS_ECBLKA', 36),
+        (0x2b0e, 'abs', 'BS_ECBLKA', 40),
+        (0x2b1c, 'abs', 'BS_ECBLKA', 44),
+        (0x2b28, 'abs', '.', 14960),
+        (0x2b3c, 'abs', 'BS_ECBLKA', 36),
+        (0x2b44, 'abs', 'BS_ECBLKA', 36),
+        (0x2b52, 'abs', 'BS_ECBLKA', 40),
+        (0x2b5a, 'abs', 'BS_ECBLKA', 40),
+        (0x2b68, 'abs', 'BS_ECBLKA', 44),
+        (0x2b70, 'abs', 'BS_ECBLKA', 44),
+        (0x2b81, 'abs', 'BS_ESTEPA', 0),
+        (0x2b92, 'abs', '.', 15064),
+        (0x2b98, 'abs', '.', 15064),
+        (0x2b9e, 'abs', '.', 15060),
+        (0x2ba4, 'abs', 'BS_ECBLKA', 44),
+        (0x2bb0, 'abs', 'BS_ECBLKA', 36),
+        (0x2bce, 'rel', 'BS_VIEWA', -4),
+        (0x2bd4, 'abs', '.', 15228),
+        (0x2be1, 'rel', 'BS_VIEWA', -4),
+        (0x2be8, 'abs', 'BS_YAW4', 0),
+        (0x2bee, 'rel', 'BS_SINA', -4),
+        (0x2bf7, 'abs', '.', 14928),
+        (0x2c06, 'abs', 'BS_YAW4', 0),
+        (0x2c0c, 'rel', 'BS_COSA', -4),
+        (0x2c15, 'abs', '.', 14928),
+        (0x2c22, 'rel', 'BS_VIEWA', -4),
+        (0x2c28, 'abs', '.', 15228),
+        (0x2c31, 'abs8', 'CAM_PTR', 0),
+        (0x2c37, 'abs', '.', 14940),
+        (0x2c43, 'abs', '.', 14940),
+        (0x2c61, 'abs8', 'CAM_PTR', 0),
+        (0x2c67, 'rel', 'BS_LIVEA', -4),
+        (0x2c6d, 'abs8', 'CAM_PTR', 0),
+        (0x2c73, 'abs', '.', 15228),
+        (0x2c7c, 'abs', '.', 14936),
+        (0x2c84, 'abs', '.', 15228),
+        (0x2c8d, 'abs', '.', 14932),
+        (0x2c93, 'abs', '.', 14944),
+        (0x2ca2, 'abs', '.', 14944),
+        (0x2cab, 'abs', '.', 15228),
+        (0x2cb4, 'abs', 'BS_STAGEA', 0),
+        (0x2cbf, 'abs', 'BS_OBJA', 0),
+        (0x2ccc, 'rel', 'BS_INITA', -4),
+        (0x2cd3, 'abs', '.', 15228),
+        (0x2cdc, 'abs', 'BS_STAGEA', 0),
+        (0x2ce7, 'abs', 'BS_OBJA', 0),
+        (0x2cf7, 'rel', 'BS_FLYA', -4),
+        (0x2d09, 'abs', 'BS_READYA', 0),
+        (0x2d40, 'abs', 'BS_ZMODA', 0),
+        (0x2d45, 'rel', 'BS_FLYEA', -4),
+        (0x2d4d, 'abs', 'BS_ZMODA', 0),
+        (0x2d52, 'rel', 'BS_FLYPA', -4),
+        (0x2d58, 'abs', 'BS_ZTIMA', 0),
+        (0x2d62, 'abs', '.', 15124),
+        (0x2d6c, 'abs', '.', 15228),
+        (0x2d79, 'abs', 'BS_OBJA', 0),
+        (0x2d81, 'abs', 'BS_ARENA', 0),
+        (0x2d8d, 'abs', '.', 15132),
+        (0x2d93, 'abs', 'BS_ZTIMA', 0),
+        (0x2db5, 'abs', 'BS_RCOUNTA', 0),
+        (0x2dbe, 'abs', '.', 15228),
+        (0x2dc7, 'abs', 'BS_STAGEA', 0),
+        (0x2dd0, 'abs', 'BS_ZTIMA', 0),
+        (0x2dd9, 'abs', '.', 15116),
+        (0x2de5, 'abs', '.', 15116),
+        (0x2deb, 'abs', 'BS_RCOUNTA', 0),
+        (0x2df9, 'abs', '.', 15116),
+        (0x2e03, 'abs', 'BS_RCOUNTA', 0),
+        (0x2e0f, 'abs', 'BS_OBJA', 0),
+        (0x2e17, 'abs', '.', 15228),
+        (0x2e3c, 'abs', 'BS_OBJA', 0),
+        (0x2e42, 'rel', 'BS_ZBOXA', -4),
+        (0x2e48, 'abs', 'BS_STAGEA', 0),
+        (0x2e4f, 'rel', 'BS_ZBOXA', -4),
+        (0x2e66, 'rel', 'BS_FLOORA', -4),
+        (0x2e72, 'abs', '.', 15172),
+        (0x2e90, 'rel', 'BS_FLOORA', -4),
+        (0x2e9c, 'abs', '.', 15172),
+        (0x2eaf, 'abs', '.', 15176),
+        (0x2f14, 'abs', '.', 15228),
+        (0x2f1e, 'abs', 'BS_OBJA', 0),
+        (0x2f26, 'abs', 'BS_ZTIMA', 0),
+        (0x2f2d, 'rel', 'BS_TM2S', -4),
+        (0x2f32, 'rel', 'BS_TM2', -4),
+        (0x2f38, 'abs', 'BS_READYA', 0),
+        (0x2f3f, 'rel', 'BS_TM2', -4),
+        (0x2f44, 'rel', 'BS_TM2S', -4),
+        (0x2f4a, 'abs', '.', 15228),
+        (0x2f54, 'abs', 'BS_OBJA', 0),
+        (0x2f5c, 'abs', 'BS_ZTIMA', 0),
+        (0x2f63, 'rel', 'BS_TM4S', -4),
+        (0x2f68, 'rel', 'BS_TM4', -4),
+        (0x2f6e, 'abs', 'BS_READYA', 0),
+        (0x2f75, 'rel', 'BS_TM4', -4),
+        (0x2f7a, 'rel', 'BS_TM4S', -4),
+        (0x2f80, 'abs', '.', 15228),
+        (0x2f89, 'abs', 'BS_STAGEA', 0),
+        (0x2f91, 'abs', 'BS_OBJA', 0),
+        (0x2f97, 'rel', 'BS_CLIP0A', -4),
+        (0x2fa1, 'rel', 'BS_CLIP3A', -4),
+        (0x2fad, 'rel', 'BS_CLIP3A', -4),
+        (0x2fb2, 'rel', 'BS_CLIP0A', -4),
+        (0x2fbb, 'abs', 'BS_CLONEFRAME', 0),
+        (0x2fc4, 'abs', '.', 15228),
+        (0x2fcb, 'rel', 'BS_CLONEA', -4),
+        (0x2fd1, 'abs', 'BS_STAGEA', 0),
+        (0x2fd8, 'rel', 'BS_CLONEA', -4),
+        (0x2fe0, 'abs', 'BS_OBJA', 0),
+        (0x2fe7, 'rel', 'BS_CLONEA', -4),
+        (0x2ff2, 'rel', 'BS_CLONEA', -4),
+        (0x2ff8, 'abs', '.', 145988),
+        (0x2ffe, 'rel', 'BS_CLONEA', -4),
+        (0x3004, 'abs', 'BS_ZGA', 0),
+        (0x300a, 'rel', 'BS_CLONEA', -4),
+        (0x3010, 'abs', '.', 16818),
+        (0x301a, 'abs', '.', 145988),
+        (0x3028, 'abs', '.', 16818),
+        (0x303b, 'abs', '.', 145988),
+        (0x3041, 'abs', '.', 145988),
+        (0x3049, 'rel', 'BS_CLONEA', -4),
+        (0x304f, 'abs', '.', 15228),
+        (0x3058, 'abs', 'BS_STAGEA', 0),
+        (0x3063, 'abs', 'BS_OBJA', 0),
+        (0x3073, 'rel', 'BS_TICKA', -4),
+        (0x3079, 'abs', '.', 16822),
+        (0x3084, 'abs', 'BS_BSSA', 0),
+        (0x3089, 'abs', '.', 148036),
+        (0x308e, 'abs', 'BS_AIDW', 0),
+        (0x3099, 'abs', '.', 148036),
+        (0x309f, 'abs', 'BS_AI1C', 0),
+        (0x30a9, 'abs', 'BS_AITIMER', 0),
+        (0x30b3, 'abs', 'BS_AILASER', 0),
+        (0x30bd, 'abs', '.', 16822),
+        (0x30cf, 'abs', 'BS_ZTAB0', 0),
+        (0x30d6, 'abs', 'BS_ZTAB1', 0),
+        (0x30dc, 'abs', 'BS_AITAB', 0),
+        (0x30e5, 'abs', 'BS_AITAB2', 0),
+        (0x30f0, 'abs', 'BS_AITAB3', 0),
+        (0x30f9, 'abs', 'BS_AITAB4', 0),
+        (0x3102, 'abs', 'BS_BSSA', 0),
+        (0x3107, 'abs', '.', 148524),
+        (0x310c, 'abs', 'BS_AIDW', 0),
+        (0x311a, 'abs', '.', 148036),
+        (0x311f, 'abs', 'BS_BSSA', 0),
+        (0x3124, 'abs', 'BS_AIDW', 0),
+        (0x313e, 'abs', 'BS_BSSA', 0),
+        (0x3143, 'abs', '.', 148036),
+        (0x3148, 'abs', 'BS_AIDW', 0),
+        (0x3156, 'abs', '.', 148524),
+        (0x315b, 'abs', 'BS_BSSA', 0),
+        (0x3160, 'abs', 'BS_AIDW', 0),
+        (0x316d, 'abs', '.', 16822),
+        (0x317a, 'rel', 'BS_ZINITA', -4),
+        (0x3186, 'abs', 'BS_OBJA', 0),
+        (0x31a6, 'abs', '.', 14968),
+        (0x31b8, 'abs', '.', 14984),
+        (0x31be, 'abs', '.', 14984),
+        (0x31c6, 'abs', '.', 14988),
+        (0x31cc, 'abs', '.', 14992),
+        (0x31d2, 'abs', '.', 14972),
+        (0x31d8, 'abs', '.', 14976),
+        (0x31f3, 'abs', '.', 14980),
+        (0x31f9, 'abs', '.', 14992),
+        (0x31fe, 'abs', '.', 14972),
+        (0x320c, 'abs', '.', 14984),
+        (0x3212, 'abs', '.', 14984),
+        (0x3218, 'abs', '.', 14996),
+        (0x3220, 'abs', '.', 14976),
+        (0x3230, 'abs', '.', 14980),
+        (0x323a, 'abs', '.', 14984),
+        (0x3240, 'abs', '.', 14984),
+        (0x3246, 'abs', '.', 15000),
+        (0x324c, 'abs', '.', 15004),
+        (0x3254, 'abs', '.', 14976),
+        (0x325b, 'abs', '.', 14980),
+        (0x3268, 'abs', '.', 15056),
+        (0x3270, 'abs', 'BS_OBJA', 0),
+        (0x3278, 'abs', '.', 14968),
+        (0x3280, 'abs', 'BS_OBJA', 0),
+        (0x3287, 'rel', 'BS_ZDRAWA', -4),
+        (0x3292, 'rel', 'BS_ZDRAWA', -4),
+        (0x32a7, 'abs', '.', 14972),
+        (0x32b3, 'abs', '.', 14976),
+        (0x32bd, 'abs', '.', 14980),
+        (0x32ca, 'rel', 'BS_ZDRAWA', -4),
+        (0x32e6, 'abs', '.', 16912),
+        (0x3303, 'abs', '.', 16992),
+        (0x3318, 'abs', '.', 16994),
+        (0x3337, 'abs', 'BS_OBJA', 0),
+        (0x333e, 'rel', 'BS_MDRAWA', -4),
+        (0x3353, 'rel', 'BS_MDRAWA', -4),
+        (0x3360, 'abs', 'BS_ZEVA', 0),
+        (0x3365, 'abs', 'BS_EVA', 0),
+        (0x336b, 'abs', '.', 16814),
+        (0x3373, 'abs', 'BS_OBJA', 0),
+        (0x337c, 'abs', '.', 16814),
+        (0x3384, 'abs', '.', 16814),
+        (0x338d, 'abs', '.', 15240),
+        (0x3391, 'abs', 'BS_COL1', 0),
+        (0x3397, 'rel', 'BS_ZGA5', -4),
+        (0x339c, 'rel', 'BS_ZGA1', -4),
+        (0x33a2, 'abs8', 'PAL_CPU', 0),
+        (0x33a6, 'rel', 'BS_ZGA1', -4),
+        (0x33ab, 'rel', 'BS_ZGA5', -4),
+        (0x33b1, 'abs', '.', 16814),
+        (0x33ba, 'abs', '.', 15228),
+        (0x33d1, 'abs', '.', 15240),
+        (0x33d5, 'abs', 'BS_COL1', 0),
+        (0x33e6, 'rel', 'BS_PALLOADA', -4),
+        (0x33f4, 'rel', 'BS_PALLOADA', -4),
+        (0x33fc, 'rel', 'BS_ZRAX', -4),
+        (0x3402, 'abs8', 'PAL_CPU', 0),
+        (0x3406, 'rel', 'BS_ZRA1', -4),
+        (0x340b, 'rel', 'BS_ZRA5', -4),
+        (0x3411, 'abs', '.', 16814),
+        (0x3418, 'rel', 'BS_ZRAX', -4),
+        (0x341e, 'abs8', 'PAL_CPU', 0),
+        (0x3422, 'rel', 'BS_ZDA1', -4),
+        (0x3427, 'rel', 'BS_ZDA5', -4),
+        (0x342d, 'abs', '.', 16814),
+        (0x3434, 'rel', 'BS_ZRAX', -4),
+        (0x343a, 'abs8', 'PAL_CPU', 0),
+        (0x343e, 'rel', 'BS_ZFA1', -4),
+        (0x3443, 'rel', 'BS_ZFA5', -4),
+        (0x345a, 'abs', '.', 149012),
+        (0x3461, 'abs', 'BS_OBJA', 0),
+        (0x346a, 'abs', 'BS_BSSA', 0),
+        (0x346f, 'abs', 'BS_AIDW', 0),
+        (0x347c, 'abs', '.', 148036),
+        (0x348e, 'abs', '.', 16822),
+        (0x3499, 'abs', '.', 15124),
+        (0x34a4, 'abs', '.', 15120),
+        (0x34ad, 'abs', 'BS_BSSA', 0),
+        (0x34b2, 'abs', 'BS_AIDW', 0),
+        (0x34bf, 'abs', '.', 148036),
+        (0x34cb, 'abs', '.', 16822),
+        (0x34d6, 'abs', '.', 15124),
+        (0x34e1, 'abs', '.', 15120),
+        (0x34f3, 'abs', 'BS_SLOTS', 20),
+        (0x34f9, 'abs', 'BS_RBNAMES', 44),
+        (0x3517, 'abs', 'BS_KEYA', 0),
+        (0x3528, 'abs', '.', 15228),
+        (0x3536, 'abs', 'BS_OBJA', 0),
+        (0x3547, 'abs', '.', 14197),
+        (0x354d, 'abs', '.', 178780),
+        (0x3557, 'rel', 'BS_MPUSHA', -4),
+        (0x355c, 'rel', 'BS_MIDENTA', -4),
+        (0x3570, 'rel', 'BS_VIEWA', -4),
+        (0x357e, 'abs', '.', 178788),
+        (0x3596, 'rel', 'BS_MSCALEA', -4),
+        (0x35a4, 'abs', '.', 178796),
+        (0x35aa, 'abs', '.', 178780),
+        (0x35af, 'rel', 'BS_MSCALEA', -4),
+        (0x35c0, 'rel', 'BS_VIEWA', -4),
+        (0x35c8, 'rel', 'BS_MSETA', -4),
+        (0x35cf, 'abs', 'BS_BARMESHA', 0),
+        (0x35d5, 'abs', '.', 178776),
+        (0x35dc, 'rel', 'BS_MESHA', -4),
+        (0x35e4, 'rel', 'BS_MPOPA', -4),
+        (0x35ed, 'rel', 'BS_TXTPOSA', -4),
+        (0x35f6, 'abs', '.', 178784),
+        (0x3600, 'rel', 'BS_CHARGEA', -4),
+        (0x360c, 'rel', 'BS_CHARGEA', -4),
+        (0x3618, 'rel', 'BS_TXTPOSA', -4),
+        (0x3620, 'abs', '.', 14213),
+        (0x3625, 'rel', 'BS_PRINT2A', -4),
+        (0x3632, 'abs', 'BS_BSSA', 0),
+        (0x3638, 'abs', '.', 16822),
+        (0x3640, 'abs', '.', 148036),
+        (0x3646, 'abs', 'BS_AILASER', 0),
+        (0x364c, 'abs', '.', 178776),
+        (0x3650, 'abs', 'BS_BARREDA', 0),
+        (0x3656, 'abs', '.', 178796),
+        (0x3660, 'abs', '.', 178800),
+        (0x3692, 'abs', '.', 178772),
+        (0x3698, 'abs', '.', 178772),
+        (0x369e, 'abs', '.', 14201),
+        (0x36a5, 'abs', '.', 178776),
+        (0x36a9, 'abs', 'BS_BARLIVEA', 0),
+        (0x36ae, 'abs', 'BS_FRAMEA', 0),
+        (0x36b7, 'rel', 'BS_SINA', -4),
+        (0x36c0, 'abs', '.', 14205),
+        (0x36c6, 'abs', '.', 14209),
+        (0x36cc, 'abs', '.', 178796),
+        (0x36d2, 'abs', '.', 178800),
+        (0x36df, 'abs', '.', 178800),
+        (0x36e9, 'abs', '.', 178776),
+        (0x36ed, 'abs', 'BS_BARONA', 0),
+        (0x36f6, 'abs', '.', 178784),
+        (0x3700, 'abs', '.', 178800),
+        (0x3709, 'abs', '.', 178788),
+        (0x3712, 'abs', '.', 178788),
+        (0x372d, 'abs', '.', 178784),
+        (0x3737, 'abs', '.', 178788),
+        (0x3741, 'abs', '.', 178792),
+        (0x374a, 'abs', '.', 178792),
+        (0x3758, 'rel', 'BS_SFX', -4),
+        (0x3762, 'abs', '.', 178788),
+        (0x376c, 'abs', '.', 178792),
+        (0x378e, 'abs', 'BS_BARONA', 0),
+        (0x3794, 'abs', '.', 15228),
+        (0x379f, 'abs', 'BS_OBJA', 0),
+        (0x37b1, 'abs', 'BS_BARLIVEA', 0),
+        (0x37b9, 'abs', 'BS_BARONA', 0),
+        (0x37bf, 'abs', '.', 15228),
+        (0x37ca, 'abs', 'BS_OBJA', 0),
+        (0x37dc, 'abs', 'BS_BARLIVEA', 0),
+        (0x37e4, 'abs', 'BS_BARONA', 0),
+        (0x37ea, 'abs', '.', 15228),
+        (0x37f5, 'abs', 'BS_OBJA', 0),
+        (0x3807, 'abs', 'BS_BARLIVEA', 0),
+        (0x3820, 'abs', '.', 15184),
+        (0x3826, 'abs', '.', 15188),
+        (0x382e, 'abs', '.', 15180),
+        (0x3834, 'abs', '.', 15192),
+        (0x383a, 'abs', '.', 15196),
+        (0x3846, 'abs', '.', 15196),
+        (0x385c, 'abs', '.', 15196),
+        (0x386b, 'abs', 'BS_WIND1', 0),
+        (0x3872, 'abs', '.', 15104),
+        (0x3878, 'abs', '.', 15104),
+        (0x3885, 'abs', '.', 15108),
+        (0x388b, 'abs', '.', 15108),
+        (0x3891, 'abs', '.', 15112),
+        (0x3897, 'abs', '.', 15112),
+        (0x389d, 'abs', '.', 15196),
+        (0x38a9, 'abs', 'BS_WIND1', 0),
+        (0x38b0, 'abs', '.', 15200),
+        (0x38b6, 'abs', '.', 15196),
+        (0x38c5, 'abs', 'BS_WIND1', 0),
+        (0x38cc, 'abs', '.', 15204),
+        (0x38d2, 'abs', '.', 15196),
+        (0x38e1, 'abs', 'BS_WIND1', 0),
+        (0x38e7, 'abs', 'BS_IDA', 0),
+        (0x38f5, 'rel', 'BS_VIEWA', -4),
+        (0x38fa, 'abs', '.', 15212),
+        (0x3901, 'abs', '.', 15208),
+        (0x3906, 'abs', '.', 15216),
+        (0x390d, 'abs', 'BS_RPITCH1', 0),
+        (0x3913, 'rel', 'BS_COSA', -4),
+        (0x391c, 'abs', '.', 15216),
+        (0x3922, 'abs', '.', 15220),
+        (0x3929, 'abs', 'BS_RYAW1', 0),
+        (0x392f, 'rel', 'BS_SINA', -4),
+        (0x3938, 'abs', '.', 15220),
+        (0x3947, 'abs', 'BS_RYAW1', 0),
+        (0x394d, 'rel', 'BS_COSA', -4),
+        (0x3956, 'abs', '.', 15220),
+        (0x3965, 'abs', 'BS_RPITCH1', 0),
+        (0x396b, 'rel', 'BS_SINA', -4),
+        (0x3974, 'abs', '.', 15216),
+        (0x3984, 'rel', 'BS_VIEWA', -4),
+        (0x3991, 'rel', 'BS_VIEWA', -4),
+        (0x3bf0, 'abs', '.', 15244),
+        (0x3bf8, 'abs', '.', 15260),
+        (0x3bfc, 'abs', '.', 15244),
+        (0x3c80, 'abs', 'BS_ZPARTS', 0),
+        (0x3c94, 'abs', 'BS_ZPARTS', 0),
+        (0x3ca8, 'abs', 'BS_ZPARTS', 0),
+        (0x3cbc, 'abs', 'BS_ZPARTS', 0),
+        (0x3cd0, 'abs', 'BS_ZPARTS', 12),
+        (0x3ce4, 'abs', 'BS_ZCROWN', 0),
+        (0x3cf8, 'abs', 'BS_ZRINGS', 0),
+        (0x3d0c, 'abs', 'BS_ZPARTS', 24),
+        (0x3d20, 'abs', 'BS_ZSIDES', 0),
+        (0x3d34, 'abs', 'BS_ZSIDES', 0),
+        (0x3d48, 'abs', 'BS_ZSIDES', 0),
+        (0x3d5c, 'abs', 'BS_ZSIDES', 0),
+        (0x3d70, 'abs', 'BS_ZPARTS', 36),
+        (0x3d84, 'abs', 'BS_ZPARTS', 60),
+        (0x3d98, 'abs', 'BS_ZPARTS', 72),
+        (0x3dac, 'abs', 'BS_ZPARTS', 48),
+        (0x3dc0, 'abs', 'BS_ZPARTS', 60),
+        (0x3dd4, 'abs', 'BS_ZPARTS', 72),
+        (0x3e08, 'abs', '.', 16996),
+        (0x3e0c, 'abs', '.', 15936),
+        (0x3e1c, 'abs', '.', 79396),
+        (0x3e20, 'abs', '.', 15944),
+        (0x3e30, 'abs', '.', 110596),
+        (0x3e34, 'abs', '.', 15952),
+        (0x3e40, 'abs', '.', 15960),
+        (0x3e48, 'abs', '.', 15960),
+        (0x3e50, 'abs', '.', 15960),
+        (0x410c, 'abs', 'BS_LOGOJ', 0),
+        (0x4174, 'abs', 'BS_LOGOZ', 0),
+    ), {
+        'tick': 0x0,
+        'confirm_a': 0x155,
+        'selscr_a': 0x1a7,
+        'selhide_a': 0x311,
+        'selmax_a': 0x330,
+        'selinc_a': 0x351,
+        'seldec_a': 0x371,
+        'selhole': 0x391,
+        'selinit_a': 0x399,
+        'selcol_a': 0x3b6,
+        'selmdl_a': 0x41f,
+        'selpart_a': 0x4cb,
+        'selzdraw': 0x54b,
+        'selzbounce': 0x7f6,
+        'sel_loadzmot': 0x8cf,
+        'selcull_a': 0x977,
+        'selsled_a': 0x9bd,
+        'selzlift': 0x9d0,
+        'selsky_a': 0xb7b,
+        'selspray_a': 0xbc0,
+        'selzy_a': 0xc08,
+        'selpalev_a': 0xc1a,
+        'selfloor_a': 0xc9f,
+        'seljagpal': 0xcaf,
+        'selstate': 0xd1a,
+        'selpalguard': 0xd2b,
+        'selpair': 0xd96,
+        'selpalback': 0xdac,
+        'selrows_each': 0xdc7,
+        'selrest': 0xe19,
+        'seldrawpal': 0xe5c,
+        'selbosspal': 0xe7d,
+        'selfade': 0xefb,
+        'selremap': 0xfba,
+        'selcol': 0x1003,
+        'selbcol': 0x1086,
+        'selstep_sube': 0x109e,
+        'selstep_sub': 0x10f4,
+        'selstep_adde': 0x1129,
+        'selstep_add': 0x1173,
+        'selcur': 0x11a8,
+        'sel_loadrb': 0x11b5,
+        'sel_slotsin': 0x124e,
+        'sel_slotsout': 0x12a5,
+        'selinfo_a': 0x12de,
+        'selqinfo_a': 0x1377,
+        'selplane': 0x1452,
+        'sellines': 0x1474,
+        'selrow_make': 0x14ed,
+        'selshift': 0x1560,
+        'selrowx': 0x1584,
+        'seltitlex': 0x1597,
+        'selmark1': 0x15a8,
+        'selmark2': 0x15bd,
+        'selframe1': 0x15d2,
+        'selframe2': 0x15e7,
+        'selclr_a': 0x15fc,
+        'seltime': 0x1611,
+        'selframex': 0x162e,
+        'pal_a': 0x165a,
+        'bosspal': 0x167d,
+        'pose_a': 0x16c9,
+        'model_ra': 0x16d7,
+        'model_ua': 0x16f0,
+        'model_rap': 0x1894,
+        'model_raj': 0x1a36,
+        'unl_zdraw': 0x1bda,
+        'unl_jdraw': 0x1c15,
+        'ident_a': 0x1c72,
+        'noshade_a': 0x1ca0,
+        'nozshade_a': 0x1cb8,
+        'name_a': 0x1cd5,
+        'unl_load': 0x1cfc,
+        'unl_save': 0x1d55,
+        'zlock': 0x1d8b,
+        'unl_tick': 0x1e73,
+        'unl_tileat': 0x1f7c,
+        'unl_grab': 0x1fd9,
+        'unl_place': 0x200c,
+        'unl_unplace': 0x20c8,
+        'unl_palsave': 0x20e5,
+        'unl_palback': 0x210a,
+        'unl_scnsave': 0x212f,
+        'unl_scnback': 0x21ab,
+        'unl_ldtex': 0x221b,
+        'unl_bits': 0x2232,
+        'unl_tops': 0x2236,
+        'unl_withjag': 0x223a,
+        'unl_withz': 0x223e,
+        'unl_has': 0x2242,
+        'unl_top': 0x225a,
+        'unl_ok': 0x2267,
+        'unl_lost': 0x2281,
+        'unl_jag': 0x2292,
+        'unl_z': 0x22e7,
+        'unl_text': 0x2366,
+        'unl_logic': 0x2375,
+        'loads_a': 0x2638,
+        'deref_a': 0x264b,
+        'case2_a': 0x2667,
+        'end_a': 0x267a,
+        'zend_a': 0x26fe,
+        'zwall_a': 0x2a11,
+        'zbeam_off': 0x2a25,
+        'zbeam_a': 0x2a47,
+        'etrans_a': 0x2ab0,
+        'is_zgradt': 0x2bd2,
+        'cam_4': 0x2bda,
+        'live_a': 0x2c26,
+        'zeye_a': 0x2c6b,
+        'init_a': 0x2ca9,
+        'fly_a': 0x2cd1,
+        'zflyin_a': 0x2d56,
+        'zready_a': 0x2db3,
+        'zfire_a': 0x2e09,
+        'zfloor_a': 0x2e37,
+        'tm_2': 0x2f12,
+        'tm_4': 0x2f48,
+        'clip_a': 0x2f7e,
+        'clone_a': 0x2fb6,
+        'ai_a': 0x304d,
+        'zinit_a': 0x316b,
+        'zflyout': 0x3197,
+        'zfly_draw_a': 0x3262,
+        'zswap': 0x32d9,
+        'jpose_a': 0x3326,
+        'zpost_a': 0x335f,
+        'zgold_a': 0x3382,
+        'zrest_a': 0x33af,
+        'zdark_a': 0x340f,
+        'zfade_a': 0x342b,
+        'zring_a': 0x3447,
+        'jlum_a': 0x34ed,
+        'zgauge_a': 0x351c,
+        'zg_fill': 0x3631,
+        'zg_press': 0x36f4,
+        'zg_full': 0x3775,
+        'zg_cent': 0x3779,
+        'zg_pamp': 0x377d,
+        'zg_pbase': 0x3781,
+        'zg_name': 0x3785,
+        'zbar_ra': 0x378c,
+        'zbar_la': 0x37b7,
+        'zbar_ba': 0x37e2,
+        'winfactor': 0x380d,
+        'win_1': 0x385a,
+        'win_1t': 0x3870,
+        'win_1a': 0x38ae,
+        'win_1b': 0x38ca,
+        'rep_1': 0x38e6,
+        'name_jag': 0x3995,
+        'name_z': 0x39a3,
+        'unl_file': 0x39ae,
+        'unl_you': 0x39b9,
+        'unl_press': 0x39c6,
+        'unl_grow': 0x39df,
+        'unl_size': 0x39e3,
+        'unl_level': 0x39e7,
+        'unl_read': 0x39eb,
+        'unl_clean': 0x39ef,
+        'unl_zwon': 0x39f3,
+        'unl_on': 0x39f7,
+        'unl_t': 0x39fb,
+        'unl_prev': 0x39ff,
+        'unl_go': 0x3a03,
+        'unl_got': 0x3a07,
+        'unl_placed': 0x3a0b,
+        'unl_first': 0x3a0f,
+        'unl_count': 0x3a13,
+        'unl_x1': 0x3a17,
+        'unl_y1': 0x3a1b,
+        'unl_x2': 0x3a1f,
+        'unl_y2': 0x3a27,
+        'urm_jag': 0x3a2b,
+        'urm_z': 0x3a37,
+        'unl_px': 0x3a43,
+        'unl_py': 0x3a47,
+        'stood_ca': 0x3a4b,
+        'pull': 0x3a50,
+        'zcam_k': 0x3a54,
+        'jcam_k': 0x3a58,
+        'cam_min': 0x3a5c,
+        'zcam_near': 0x3a60,
+        'ecam_jag': 0x3a64,
+        'ecam_z': 0x3a68,
+        'ecam_zfly': 0x3a6c,
+        'ecap_d': 0x3a70,
+        'zcharge': 0x3a74,
+        'zfly_on': 0x3a78,
+        'zfly_y': 0x3a7c,
+        'zfly_z': 0x3a80,
+        'zfly_p': 0x3a84,
+        'zfly_n': 0x3a88,
+        'zfly_g': 0x3a8c,
+        'zfly_h': 0x3a90,
+        'zfly_v1': 0x3a94,
+        'zfly_v2': 0x3a98,
+        'zfly_z1': 0x3a9c,
+        'zgold': 0x3aa0,
+        'zbeam_v': 0x3aa4,
+        'zbeam_y': 0x3aa8,
+        'zbeam_z': 0x3aac,
+        'zbeam_n': 0x3ab0,
+        'zbeam_free': 0x3ab4,
+        'zbeam_far': 0x3ab8,
+        'zspd': 0x3abc,
+        'zspd_at': 0x3ac0,
+        'zspd_k': 0x3ac4,
+        'zslow': 0x3ac8,
+        'end_g1p': 0x3acc,
+        'zstage': 0x3ad0,
+        'eside': 0x3ad4,
+        'eside_n': 0x3ad8,
+        'rm_jag': 0x3adc,
+        'rm_z': 0x3ae8,
+        'rrm_jag': 0x3af4,
+        'win_tries': 0x3b00,
+        'win_turn': 0x3b04,
+        'win_steps': 0x3b08,
+        'zr_wait': 0x3b0c,
+        'zl_prev': 0x3b10,
+        'zl_on': 0x3b14,
+        'zl_ang': 0x3b18,
+        'zf_start': 0x3b1c,
+        'zfl_wall': 0x3b44,
+        'zfl_step': 0x3b48,
+        'win_z': 0x3b4c,
+        'win_jag': 0x3b50,
+        'win_jmin': 0x3b54,
+        'win_zmin': 0x3b58,
+        'win_share': 0x3b5c,
+        'win_35': 0x3b60,
+        'win_30': 0x3b64,
+        'rep_z': 0x3b68,
+        'rep_jag': 0x3b6c,
+        'pullk': 0x3b70,
+        'pullh': 0x3b74,
+        'was': 0x3b78,
+        'boss': 0x3b7c,
+        'bsrc': 0x3b80,
+        'bcolor': 0x3b84,
+        'bside': 0x3b88,
+        'sel_step': 0x3b8c,
+        'sel_bstep': 0x3b90,
+        'sel_one': 0x3b94,
+        'sel_twenty': 0x3b98,
+        'sel_zgap': 0x3b9c,
+        'sel_zy': 0x3ba0,
+        'sel_zscale': 0x3ba4,
+        'sel_zstep': 0x3ba8,
+        'sel_zrise': 0x3bac,
+        'sel_zlook': 0x3bb0,
+        'sel_zback': 0x3bb4,
+        'sel_bcol': 0x3bb8,
+        'sel_bslots': 0x3bc0,
+        'sel_rowsin': 0x3bd0,
+        'sel_objst': 0x3bd4,
+        'sel_lpair': 0x3bd8,
+        'sel_launch': 0x3be0,
+        'sel_remap': 0x3be4,
+        'sel_remapto': 0x3be8,
+        'sel_fjag': 0x3bf0,
+        'sel_fz': 0x3bf8,
+        'sel_fedge': 0x3c04,
+        'sel_fslope': 0x3c08,
+        'sel_ffloor': 0x3c0c,
+        'sel_f65536': 0x3c10,
+        'sel_zup': 0x3c14,
+        'sel_zexit': 0x3c18,
+        'sel_zthrust': 0x3c1c,
+        'sel_zclear2': 0x3c20,
+        'sel_zclear': 0x3c24,
+        'sel_zfast': 0x3c28,
+        'sel_zdive': 0x3c2c,
+        'sel_zdivemax': 0x3c30,
+        'sel_zskim': 0x3c34,
+        'sel_zclimb': 0x3c38,
+        'sel_zeye': 0x3c3c,
+        'sel_zrad': 0x3c40,
+        'sel_zease': 0x3c44,
+        'sel_zpivot': 0x3c48,
+        'sel_zpivotn': 0x3c4c,
+        'sel_ztilt': 0x3c50,
+        'sel_zspin': 0x3c54,
+        'sel_zhead': 0x3c58,
+        'sel_eight': 0x3c5c,
+        'sel_four': 0x3c60,
+        'sel_zbob': 0x3c64,
+        'sel_zturn': 0x3c68,
+        'sel_zprevz': 0x3c6c,
+        'sel_zflamey': 0x3c70,
+        'sel_zflamerx': 0x3c74,
+        'sel_zflames': 0x3c78,
+        'sel_zjet': 0x3c7c,
+        'selzparts': 0x3c80,
+        'selzmotok': 0x3dec,
+        'selzgot': 0x3df0,
+        'selzmtname': 0x3df4,
+        'selzmots': 0x3e00,
+        'selzmot': 0x3e40,
+        'selzdip': 0x3e48,
+        'selzrec': 0x3e50,
+        'selzpose': 0x3e58,
+        'seljagdraw': 0x4060,
+        'sel_jagcam': 0x4064,
+        'sel_neck': 0x4070,
+        'selbuilt': 0x407c,
+        'selt0': 0x4080,
+        'seltxt': 0x40b0,
+        'sel_frx': 0x4180,
+        'sel_rbin': 0x4190,
+        'sel_rbsave': 0x4192,
+        'selblank': 0x419a,
+        'zmine': 0x41ae,
+        'copied_a': 0x41b2,
+        'banked_a': 0x41b6,
+        'rmbase_on': 0x41ba,
+        'stood_a': 0x41be,
+        'unl_palin': 0x41c2,
+        'unl_scn': 0x41c6,
+        'unl_scnmem': 0x41ca,
+        'unl_scnin': 0x41ce,
+        'unl_glow': 0x41d2,
+        'unl_sega': 0x41de,
+        'unl_texb': 0x41e2,
+        'unl_texnow': 0x41e6,
+        'bss': 0x41f0,
+        'zfake': 0x41f0,
+        'zpose': 0x4210,
+        'selzmotion': 0x4264,
+        'selzdipf': 0x13624,
+        'selzrecf': 0x1b004,
+        'selzvar': 0x229e4,
+        'selzout': 0x22a18,
+        'selrow': 0x22e18,
+        'selhas': 0x23268,
+        'selrows': 0x2326c,
+        'seld68': 0x2335c,
+        'sellcam': 0x23384,
+        'selda8': 0x233fc,
+        'selpath': 0x23424,
+        'sel_rbbuf': 0x23528,
+        'sel_rbtry': 0x23558,
+        'selscript': 0x23564,
+        'copy_a': 0x23a44,
+        'bank_a': 0x24244,
+        'scratch_a': 0x2442c,
+        'zring': 0x24614,
+        'zg_tmp': 0x2ba54,
+        'zg_mat': 0x2ba58,
+        'zg_width': 0x2ba5c,
+        'zg_held': 0x2ba60,
+        'zg_timer': 0x2ba64,
+        'zg_sounded': 0x2ba68,
+        'zg_h': 0x2ba6c,
+        'zg_ready': 0x2ba70,
+        'objsave': 0x2ba74,
+        'stand_a': 0x2c074,
+        'standai_a': 0x2c674,
+        'rmbase': 0x2c85c,
+        'aisave_a': 0x2c88c,
+        'stand_ca': 0x2ca74,
+        'standai_ca': 0x2d074,
+        'unl_tiles': 0x2d25c,
+        'unl_area': 0x31b5c,
+        'sel_rowskept': 0x364dc,
+        'unl_pals': 0x37cdc,
+        'unl_map': 0x43cdc,
+        'fxsave': 0x43d78,
+        'fx2save': 0x440d8,
+    }),
     'PAD_COND': (bytes.fromhex(
         '0200000000100000020000000020000002000000004000000200000000800000'
         '0200000000010000020000000002000003000200400000000300030040000000'
@@ -5966,6 +17923,42 @@ def blob_of(name, blobs=None):
     return blobs[name]
 
 
+def own_len(name, blobs=None):
+    """How much of a blob with a section of its own the file carries: up
+    to its last byte that is not zero. The rest is the section's virtual
+    size."""
+    return len(blob_of(name, blobs)[0].rstrip(b'\0'))
+
+
+def own_place(build, blobs=None):
+    """name -> (virtual address, file offset) of each of a build's own
+    sections, as add_section lands them one after the annex: the next page
+    after the last section, at the next 0x200 of the file."""
+    out = {}
+    if not build.own:
+        return out
+    va, raw = build.annex[0], build.annex[1]
+    vlen = rlen = annex_layout(build, blobs)[1]
+    for name in build.own:
+        va = (va + vlen + 0xfff) & ~0xfff
+        raw += rlen
+        out[name] = (va, raw)
+        vlen = len(blob_of(name, blobs)[0])
+        rlen = (own_len(name, blobs) + 0x1ff) & ~0x1ff
+    return out
+
+
+def file_end(build, blobs=None):
+    """The patched file's length before any apply-time section: the
+    annex and the build's own sections, every one of them ticked."""
+    end = build.size
+    if build.annex:
+        end = build.annex[1] + annex_layout(build, blobs)[1]
+    for name, (_va, raw) in own_place(build, blobs).items():
+        end = raw + ((own_len(name, blobs) + 0x1ff) & ~0x1ff)
+    return end
+
+
 def annex_layout(build, blobs=None):
     """name -> offset into the annex, and the annex's padded length."""
     out, at = {}, 0
@@ -5983,6 +17976,8 @@ def cave_va(name, build, blobs=None):
     blobs = BLOBS if blobs is None else blobs
     if build.annex and name in build.annex[2]:
         return build.annex[0] + annex_layout(build, blobs)[0][name]
+    if name in build.own:
+        return own_place(build, blobs)[name][0]
     at = build.caves[name]
     if isinstance(at, tuple):
         inner, label = at
@@ -6020,7 +18015,7 @@ def link(name, build, blobs=None, base=None):
     `base` overrides the cave, for a blob whose address is only known at
     apply time; None means the blob must not name itself."""
     code, fixups, _labels = blob_of(name, blobs)
-    if base is None and (name in build.caves
+    if base is None and (name in build.caves or name in build.own
                          or (build.annex and name in build.annex[2])):
         base = cave_va(name, build, blobs)
     out = bytearray(code)
@@ -6137,14 +18132,26 @@ def rva(target):
         '<I', symbol_va(target, build) - 0x400000).hex()])
 
 
+def _written(name, build):
+    """A blob's bytes as the file carries them: linked, and for one with
+    a section of its own, without the zeroed tail."""
+    code = link(name, build)
+    if name not in build.own:
+        return code
+    n = own_len(name)
+    if any(code[n:]):
+        raise ValueError('%s: a fixup in its zeroed tail' % name)
+    return code[:n]
+
+
 def blob(name):
     """A blob as this build writes it."""
-    return Sym([lambda build: link(name, build).hex()])
+    return Sym([lambda build: _written(name, build).hex()])
 
 
 def zeros(name):
     """What a cave holds before the blob goes in."""
-    return Sym([lambda build: '00' * len(blob_of(name)[0])])
+    return Sym([lambda build: '00' * len(_written(name, build))])
 
 
 def site(name):
@@ -6563,6 +18570,375 @@ def _check_banner():
 
 
 BANNER_UNIQUE, BANNER_SPILLED = _check_banner()
+
+
+# The select's portraits of the bosses (asm/bosses.asm, selrow_make): drawn
+# for the patch, framed and backed as the eight's are, 48x64 each in the
+# select's colour, row by row (assets/portrait_*.png, baked in by
+# tools/portraits.py). They go where the select's art has room for them.
+# The select loads its art in pieces; one is the portraits, each given 128
+# tiles and using 48, and the empty 80 after two of them (file tiles 0x1730
+# and 0x17b0, the select's 0x137a and 0x13fa) take the bosses'.
+BOSS_ICON_TILES = (0x1730, 0x17b0)
+BOSS_ICON_GROUND = 0x0020       # the eight's black, under their art
+# BOSS PORTRAITS BEGIN - tools/portraits.py
+BOSS_PORTRAITS = bytes.fromhex(
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c634831e42020002000200020002000200020002000'
+    '200020002000200020002000200020002000200020002000200020008631861070527052'
+    '70520621e42084084559610820002000200020002000200020002000200020002c632c63'
+    '2c632c634929d362d362e420200020002000200020002000200020002000200020002000'
+    '20002000200020002000200020002000a831a7187052705270520621e520841887292000'
+    '20002000200020002000200020002000200020002c632c632c632c63d362d362d262d362'
+    'f162e4202000200020002000200020002000200020002000200020002000200020002000'
+    '200020008831e820705270527052e520e520841867292000200020002000200020002000'
+    '20002000200020002c632c632c632c63d362d362d362d362b262d262d162e420e4202000'
+    '200020002000200020002000200020002000200020002000200041084831292970527052'
+    '7052e520e520841066292000200020002000200020002000200020002000a2102c632c63'
+    '2c632c63d362d362d362d362d362d262d362d3624f52e420200020002000200020002000'
+    '20002000200020002000200020004529a7186931705270527052e52005214308a7312000'
+    '20002000200020002000200020002000200066292c632c632c632c63d362d362d362d362'
+    'd362d362d362d362d362b262e420e4202000200020002000200020002000200020002000'
+    '2000a731a7186a31705270520729c4180521841825212000200020002000200020002000'
+    '200020002000a8392c632c632c632c63d362d362d362d362d362d362d362d362d362d362'
+    '4f520621e520200020002000200020002000e420e420e520a8398831e620282927292829'
+    '4f52cb39693184104529200020002000200020002000200020002000410888312c632c63'
+    '2c632c63d362d362d362d362d362d362d362d262d262d262d362d3624f52052183102521'
+    '2000e418a8318518a518e6204310a5180629aa390d4a7052d362d3620d4a631024212000'
+    '20002000200020002000200020002000e41828292c632c632c632c63d362d362d362d362'
+    'd362d262d262d262d362d362d362d362d362d362e62025294629a5104408e72027292729'
+    '272970522f52915ad362d362d362d362d3622829e3182000200020002000200020002000'
+    '200020006631a5182c632c632c632c63d362d362d362d362d262d262d362d362d362d362'
+    'd362d362d3627052b25a610820006108610861108210a21082106831d362d362d362d262'
+    'b25ad362d362915a915a662920002000200020002000200020002000853120002c632c63'
+    '2c632c63d262b262b262b262d262d362d362d362d362d362d362d362d3622e4a27296008'
+    '60086008a318c418611060082008a210d362d362d362472982104f52d362d3620e4a8510'
+    'a8394108200020002000200020002000a63121082c632c632c632c634f52d362d362d362'
+    'd362d362d362d362d362d362d362d362d3620e4a052120082008c31870527052a3184000'
+    '40008110915ad362915a811081108110d362d362d2624829c61848292521200020002000'
+    '20002000282929292c632c632c632c63e6204f52d362d362d362d362d362d362d362d362'
+    'd362d362915a2e4a821020088b6d70527052705270526200801061104f52d36270528110'
+    '8931aa390d42d362d262915ad362b25a2f4a2d4aa731e41866296631a618e6202c632c63'
+    '2c632c63e52006210e4ad362d362d362d362d362d362d362d36270528b21281963088b6d'
+    '4f87705270527052045182b921a12000cb39d362d3628110811081100d42d362d362915a'
+    'b25ad362d362915ad362d36285108410c518c4182c632c632c632c63061106210621ab39'
+    'd362d362b25ad362d362b25a70525052255170527052705270527052c36840f940c9a1f9'
+    '01b920000519d362d362915a81108110d362d362d362915ab25ad362d262d362d362d362'
+    'a410c418e518c5182c632c632c632c63e440e6000619062969317052d362b25ab25ad362'
+    '29196641e1c940f940f940f940f940f940f98b6d4f8740f941c92000a310d362d362d362'
+    'd362b25ad362d362d362d362d362d362d362d3620e4ac518e518e518e518c5182c632c63'
+    '2c632c6302c10381e608e618062106210721482948292729e718a6394f874f874f874f87'
+    '4f874f874f8740f940f90161c15840088210915ad362d362d362d362d362d362d362d362'
+    'd362d362d362d362e5180521e518e518e518c5182c632c632c632c63e37002c10399e600'
+    '0621062107210621062127292719c720c35040f940f940f940f940f940f90161c1088100'
+    '4100601061104f52d362d362d362d362d362d362d362d362d362d3628a31e520e520e610'
+    'c508e508e518e5182c632c632c632c63e0f0e44002c10481e70006190721e710a600a600'
+    'c610a75125314000705270527052705261088100810861106110611060084921b25ad362'
+    'd362d362d362d362b25ad362d362e520e520e518c600c428e460c440c500e5082c632c63'
+    '2c632c63c0f0e2b0c60002c10469070907196639c569649a43db44e344e344e340084108'
+    '610861006108611081108110810820002000653950528d29d362d362d362d362915a0e4a'
+    'e620e6200621e500e378e2d8a0d0a0d0a0d0e4402c632c632c632c63c0e8e1e0e700e610'
+    '00f982b0e561a3fb82fb22fcc3fbc1302000811081108110811061108110811061080100'
+    '2000c128a2aa83fc26bb4e5a8d296d21d362b25ad362e520e620e620e600e36801f9c458'
+    'c358e368e368a0d02c632c632c632c63e0e8e460e6000481e0f882b0249a62fb42fb43eb'
+    'a2282000a11081106110811081108110811020000100023962a2a3fb83fc83fc83fcc2fb'
+    'e5b22d5a9152b25a0621061906210601e61002d9c428c368e0f8e0f8c360c4102c632c63'
+    '2c632c63e430e43002d102c1e630c620e39142fb43fbe238010081108110811081108110'
+    '811021000100c12842a2a3fbc3fb62fb83fc83fc83fc83fc41fc63fcc6516400e4180631'
+    '2721e520a0d00399c600e1d8a0f0a0d0e0f8e4382c632c632c632c6302c102b9e388e610'
+    'e700070943aa02e3e23020004100410061088110810820000100c1280292c3fb83fc63fc'
+    '23fc83fc43fc83fc83fc83fc83fc82fca4618600c400a0d02721a0d0e0f8c518e600e2c0'
+    'c0f8e430c0f8c2982c632c632c632c63e520e610e600e620e618263182c2e199a118c228'
+    'c2208108410001000100013942a243fc63fc83fc63fc83fc83fc83fc83fc83fc83fc83fc'
+    '83fc23fc84598500e500e3802721e380e0e0a0d0e510e430e0f8a0d0c0f8c2982c632c63'
+    '2c632c632400c51805210621c708444981d202f342fb23f303e3c3ca42b2e29142aa63fc'
+    '43fc83fc83fc83fc83fc83fc83fc83fc83fc83fc83fc83fc63fce2fb64598500e518a318'
+    '06110619c518e38002d1e430c35000f1e1d8a4282c632c632c632c63636203006408e510'
+    'c51022aa42fb22fb22fb42fb42fb42fb42fbc2fb63fc83fc83fc83fc83fc83fc83fc83fc'
+    '83fc83fc83fc83fc83fc63fca3fca2fb4359a500e520a208c40827210611e600e550a0d0'
+    'e288e278c360a0d02c632c632c632c63e4f5a4a324000400636162fb82fb42fb42fb42fb'
+    '22fb02f342fbc2fb63fc83fc83fc83fc83fc83fc83fc83fc63fc63fc43fc43fc82e343db'
+    '43b262d2a3718400e5208210a310272906210621e600e518a0d0a0d0a0d0e2982c632c63'
+    '2c632c6303f544fea5cc643962c2a2fb62fb62fb62fb62fb42fb22fbc2fbe3fb63fc83fc'
+    '83fc83fc83fc63fc63fc63fcc2f322eb82daa170a2d141d980a8c2a9e4796400e420a318'
+    '821006210621e620e5200619e600c608630003002c632c632c632c63e3f423fd44fe64fc'
+    '02fb62fb62fb62fb62fb62fb42fbc2fb23fce3fbe2fb63fc43fc43fce3f3e3fba2dae3c1'
+    'a170a170a170e1b8c18860f181f9a2a1c3718400e418c318811005210621e5200521e618'
+    'c6082110c55186312c632c632c632c63e3f464fd04f582fb82fb82fb82fb82fb82fb42fb'
+    'c2fba3fca3fc63fc03f443dbe2d242d242a9e290a170a170a17061d982e1c1e9c078e188'
+    'a1f981a9a3718400e518e41881108110a318e520e610c5106038448a410820002c632c63'
+    '2c632c63e3f484fd02fc42fba2fba2fba2fba2fba2fbe2fb83f4e3eb03db42d2c1d101a1'
+    '21a961f9a170a170a17061c941b921916100a1f981e120000199c2d98369a408e518e418'
+    'a218c318e510c6100431e068e4612000200020002c632c632c632c6303f523fc22fb62fb'
+    '82fb82fb62fba2fbc3fba2d2e2c941c9c0c8c1d001e1c1902199c1f96100e1f961e14100'
+    '21006100610061d1e1f9611842b1c2d94359c508e5180521e518e608052142612089868a'
+    '6529e7396952ca5a2c632c632c632c63c2eb62fb82fb62fb82fb62fb82fb42fb22e381c1'
+    'a0d820d941d941c961d1c16001a101996100c2f981f1200061006100e168a1f1c1f1a150'
+    'a1f961c92249e510e518c508c51024498181a0918782ae734c6b2b6bad7b2b6b2c632c63'
+    '2c632c63c2eac2da22eb42fb42fb62fb22f3a2dae2da02c200c941d141c941c141c90181'
+    '42a961d1610061b901fa62c141b941c1a2d1a170a1700191a1f121c10249c60885008428'
+    '22698091a2796e73f1634e5bab526942aa52694a2c632c632c632c63e2e20392039222fb'
+    '03920392e2ea82cac2d222c221b921c121c121c161d9e180c14802fa21b9610081b9a170'
+    'a170a170a170a17041b9a3e982d960e1c3606500e37902cb43ec42c3449a6ac44abccaa3'
+    '8b8b8b7b0a63c9622c632c632c632c6382ca0392039203f303920392e2e282caa2c222b2'
+    '21b121c121c141c161d921b1a14082d1a1f92199a170a170a2d182e161e981f981f981f1'
+    '81f1a1d9228123bb83fdc4fd04fe44ec21cae0eaa2fb63fc64fc25fc44e343c22c632c63'
+    '2c632c6342ba0392c191e2e203920392c2da62c282c242b221a921c941c141c941d161e9'
+    '41c1019162c9a2e162d941d961f181f9a1f9a1f9a1d9a1a942896279e3e3c4fc83cbe3e3'
+    'c4ec83f402ba42c242bac2c241fb01fb02f360b92c632c632c632c6302aaa2da82d282ca'
+    '62c262c282ca62ba42ba63b282b920d141d141d940d961e181f141d941e161f961f961f9'
+    '61e961c982a9a189a179c28142aaa3d3e3e3e130e130e13044d4e3fc02b262c282bae299'
+    '82d223fbc2da42c22c632c632c632c6302a2a2d282d282ca82d282d282ca62ba42ba82ba'
+    'c2c121d941d941d960e981f961f980f960f161d982c182998281a279a271e28902a24189'
+    '04dc65fd20002000a120e13084e403fd22b262ba82c202a222aa82caa2d262c22c632c63'
+    '2c632c6302a2e2e2e2e2c2daa2daa2daa2da62c262c2a2cac1b920d961e961f980f961f9'
+    '61e181c982a1a281a271a271a2798179a181c299a279c318659364fde130e130e3dbc4fc'
+    '83fca4f442b222b262ba02a222aa02a262ba62ba2c632c632c632c6302aa03eb42fb02eb'
+    '02f302f302eba2da82d202e362d220e941f981e1a1c9a1a1c289c279a271827961718181'
+    'c29122a22292a369e3592482c3db43fd24fd24fde3fc83fc23fde4fc62b202aa62ba029a'
+    '02aa02a2e29942b22c632c632c632c63c128a128a3c262fbe2e222f302eb82da22ba42ba'
+    'c2a901a1a2b102a2e291229a01a201a242b262c202db63eba3f3e3fb83f303db22eb22fb'
+    'c2fb24fdc3fc83fc83fc83fc03fd24fd82b202aa62b2039242b203eb22aac2892c632c63'
+    '2c632c632000410044eba2fb81c222aae2dac3eb63d3e3ba429a629282aae391e2918271'
+    '23498361639a23cb83ebe3fbc2fb42f322f322fb22fbc2ea82f324fdc3fc83fc83fc83fc'
+    '03fd44fdc2ba02a222a242aa02e322fb02e302a22c632c632c632c6361084100a17923f3'
+    '42fba2e2e3fbe3fce3fcc3fc43fd04fd056ac718e5208308830083008508e710640022a2'
+    '82fb02eb02eb02ebe2eac2ea82fb23fde3fc83fc83fc83fc83fc44fde2c2c29922aa02eb'
+    '02f3e2e2e2eac2da2c632c632c632c63811041006010628123eb23fca3fca3fc63fc22fd'
+    '84f4a65167000619e618e620e5200621282108196500e28982fb02ebe2eae2e2e2eae2ea'
+    'e2ca24f563fc83fc83fc83fc83fc83fc22c3c1a1c2da22f3e2e2e2e2e2e2c2da2c632c63'
+    '2c632c638110811081100151217123e444fda2fc63fde4cbe62867000621e620e6200621'
+    '272928290621e4208400e38162fbe2e2e2e2e2e2e2ea0151a10804ed83fc83fc83fc83fc'
+    '83fc84fda2cb42ca02f3e2e2e2e2e2e2e2e2a2d22c632c632c632c638110811040000239'
+    'e260028a84fda3fd65ab670887000621e520e620072127292729e520e418e5208500a369'
+    '42fbc2e2c2dae2eac2da2000c12044fd83fc83fc83fca3fc24fde4fde3eb82e2e2eae2e2'
+    'e2e2c2e2c2e2a2d22c632c632c632c6381108110610881186269216904e467a36800a710'
+    '0629e6200621072128292729e520e420e420e520a500425102f3c2daa2dac2dac2daa120'
+    '8120e4f4e4fd03fd83fc63fc23f4c2eb02ebe2eae2e2c2e2c2e2e2e2c2daa2d22c632c63'
+    '2c632c6381108110811040002249c29102390300030864188518c620082928290621e520'
+    'e518e520e520e518a5080341c2e2c2daa2d2a2d2c2e20149200083bba3fc62eb02e3c2e2'
+    '82da61dae2ea23f302ebc2e2c2dac2dac2daa2d22c632c632c632c638110811081106108'
+    'a118c391a038c10003328321e21021086210e4180521e518e518e518e518e518a5080339'
+    'a2d2a2da82ca82cac2e241592000a27902fb82daa2e2c2e2e2e2e2e2e2ea22f342f322f3'
+    'e2e2a2d2a2daa2d22c632c632c632c6381108110811081106000e1386038242a4f874f87'
+    '4f874f87611920000621e520e518e520e520e518a408e22082c2a2d282c282c2c3e28271'
+    '2000c13023f302f3e2e2e2eae2ea02ebe2e202eb22f342f342fb02eba2da82ca2c632c63'
+    '2c632c638110811081108110811060080008a4294f874f874f874f87e53a2000e520e518'
+    'e418e418e41805218308811083b2a2d282c282c2c3e2c2812000200062ba62fbe2eae2ea'
+    '02eb02eb02ebe2ea02eb22f342fb62fb42fba2d22c632c632c632c638110811081108110'
+    '8110811020006321e8534f874f874f8726430108c518e418e418e418e5180421a3108210'
+    '43a2a2da82c282c2c3e2029240002000425983fb02eb02eb02eb02eb02eb02eb02eb02f3'
+    '22f342fb62fb42f32c632c632c632c6381108110811081108110811061106110c4296532'
+    '6532674b853a4108c418e420e418e418e418e418c4106200e291c2e282c282c2c2da22a2'
+    '40004108225102eb42fb02f302f302eb22f302ebe2ea02eb22f322f342fb42f32c632c63'
+    '2c632c63811081108110811081108110a1106110200020002000200000088110e418e420'
+    'c418c418c418e520c4184200c279e2e262c262c2a2da22aa40084251c13862ba82fb02f3'
+    '22f342fb62fb62fbe2e202eb22f322f342fb22f32c632c632c632c638110811081108110'
+    '8110811060108110653a653ae429a429c1106008c418e420c418c418c418e420c3184200'
+    '8371c2e282ca82cac2da62ba8118224161100249a3fba3fb62fb02e362b222aae2e202eb'
+    '02f302f322fb22f32c632c632c632c6381108110811081106108410020006100474b4f87'
+    '4f874f874f8761106310e520c418c418c418e420e41863006261e2e2a2caa2cac2e2a2d2'
+    '41082000c130e289a3ca0292827142594261a281e2e202eb02eb22f322f322eb2c632c63'
+    '2c632c6361082000010021008108c2284259c130852a4f874f874f874f8722192210e520'
+    'c418c418e418e420e41863006359e2eaa2d2a2d2c2dac2dac281e29103eb82fb029a0161'
+    'a28902a242c282d2e2eae2ea02eb02f322f342fb2c632c632c632c638118e1388269e291'
+    '62b2c2d243f30159a409a84ba5326432c84b82212108e518c418e418e418e418e4184200'
+    '2241e3e2a2d2a2d2a2d2c2d223f323f3e2eac2e2e2e262ca21b221b222a2827902a202eb'
+    'c2dae2e2e2e2e2da2c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c639d9d9d9d7d9d9d9dbd9d9c9d820820002000200020002000200020000419d384'
+    '378d8c422521e318e31820006b42ffdfab4a2000e318e318e318e31820004108136c1ebf'
+    'beae3c9e7995b57cf16b0c53e831e318e31820002c632c632c632c637d9dbd9d7d9dbd9d'
+    '7d9d7c84c83120002000200020002000e310f063bdae505b2000e318e318e31813953695'
+    '34749db65fc7fca57eaeffbedebe1ba6f58cb8a5ffdfffdfffd7bfcf5ec73ebf3ec73ebf'
+    '1ebfdfdf7bb632742c632c632c632c631c95bd9d7d9d5d9d1c953d84e831200020002000'
+    'a210705b3da6deb6beb6f9a5d8a53595b6a5dfdfffce5fa53fae3d9ebc959d955c8d5c8d'
+    '7d95dea55fb67fbedfadfead1eb69ebe3ecfbfdfffe7ffe7fffffccee93920002c632c63'
+    '2c632c633d9dfd94de941fae1c95786b2f5b2419e310ef6bbdb6deb61ebf3ec79fd7ffef'
+    'ffffffff3fd7ba5aba5af962f98492529252925292529252925292529252925292529252'
+    '9252db73be947fa5fead3db69dc61bae3695369d2c632c632c632c63bc8cbe8cfb7bed39'
+    'cc39357cfdbedfd75cae9db6ffdfffefdfdfffe7fffffff71bb6ba5aba5aba5adfd7dfd7'
+    'bbb6bcb61dc7dfdfdfd7dfd7dfd7dfd7dfd7dfd7dfd7dfd7dfd7125bf35a9252d452fa73'
+    'dc8c9d957fb6ffbe2c632c632c632c639f8cf45a2b422f7c517c9fcf9fd7f16be4182421'
+    '8629ed527ddfffff9dc67b8cba5aba5adfd7dfd7dfd7dfd7dfd7dfd79edf7abe3ddfdfd7'
+    'dfd7dfd7dfd7dfd7dfd7dfd7dfd7dfd7dfd7dfd7dfd7767c3b95b984787cfa842c632c63'
+    '2c632c63b773547cbab6bfdfffef53742108e318e3182000c41897ad9dce3da5ba5aba5a'
+    '8b31dfd7dfd7dfd7dfd7dfd7dfd7ffe7dfd75abe3cd7dfd7dfd7dfd7dfd7dfd7dfd7dfd7'
+    'fdc65bae9cb63ec71ec77bae19a6bd9dbd9dbd9d2c632c632c632c635274937c305b9352'
+    '9fcf537c20004a42e318ffdfb684ffff3fb67a52524a4d5bb89d7fcf7fcf1dc7dfdfdfd7'
+    'dfd7dfd7dfd7bee7779d5bb6dfd7ffe7ffe7fff7dfd7dfd7dfd7dfd7bedf1dcf9bbef9ad'
+    'bd9dbd9dffe7ffe72c632c632c632c633674b46bf36bfd8cb973ffdf9a95ffdfffdfe318'
+    'e318cd4a5fcf5ebefdbebd9dbd9dbd9d3dd7dcce3dd79edf3dcf5dcf5dd73ab61aae7bbe'
+    'fcce1ccf5ddfbbc67bbe3dcf3dd75ddf3dd75dd73dd7bd9dbd9ddfdf9fd77ecf2c632c63'
+    '2c632c63f46b7fcffff73dae71391a95ffdfc8312000200020002000e318e9526e5bd99d'
+    'dfdfbd9dbd9dbd9dbd9dbd9dbd9dbd9dbd9d9edfffeffff7bee73dd7b8a5779d3dcfbedf'
+    'bfe7ffeffff77edfbd9dbd9dffe7ffe7ffdfffd72c632c632c632c63b8a5f68cdfdfdee7'
+    '0e53b239bfbe7fc79995f584126c0d5344212000cd52bbb6bfd75ec73ec7ffbe7fcfbfd7'
+    'dfdfdfdfbfdfbd9dbd9dbd9dbd9dbd9dbd9dbd9dbd9dbd9dbd9dbd9dbd9dffffbd9d3274'
+    '6b4290633274b5842c632c632c632c63fcc6cb39757cfffffac6514abd8c9daebfb6dfbe'
+    '1fbfffbe5eae3da6dfcfbfcfffbeffbeffbeffbeffbeffbeffbe3ec7ffd71ec79384158d'
+    '7bae9fd7ffef7fd7d9a5ffefffdfb58411749284093a200020002000200091632c632c63'
+    '2c632c63bbc62c4208217bb6ffff99a5397c397c397cbc9d3b8d1c953d953ec7ffbeffbe'
+    'ffbeffbeffbeffbeffbeffbeffbeffbe999526212000200020000419e83146212000c518'
+    'ffdff58c20002000200003190421ac4a3ca6ffb62c632c632c632c637fcf0e53a6106d42'
+    'dfd7fff7fba5198d514a514a514a514a397c3d9d3f9dff945d8cfc7b3c84ffbeffbeffbe'
+    'ffbeffbe5a8dd67cb57cb0636b42042120082421083ac731f684ffdff78cf373f88c3995'
+    '7b95dfb6ffb6fc942c632c632c632c63977c8b422621ec390c3ac300c300c300c300c300'
+    'c3007b95514a514a514a514a514a514a514a397c397c5e9dfb941b8dbd9d7fae1fbf5fbf'
+    '5fbf9eaebb9d1da67fb67fb65d9d3a7cbd8c5fa53f9d5e9d7d9d9c95bc9d514a2c632c63'
+    '2c632c631674977c47294d42a91239473947eb32394727123947578d3ca69895927c3274'
+    'b16b105baf52514a514a514a514a514a514a514a514a514a514a514a514a514a514a514a'
+    '514a514a514a514a514a514a514a514a514af8732c632c632c632c63315bffa5325bca31'
+    'a912394739472000c300200020008c427b9d198dbfb6ffd7ffd75fc75baef9a5917c537c'
+    '7c9d3a95b984d9843b8ddd9d7ea63ea69d951c95dc8c145bee390e420d3aeb39ef52b98c'
+    'd88cf78cd78498952c632c632c632c638f4a3b95ba8c0c3a0c3a200020006d2b39473947'
+    '64094b4a3daed052d46b15743574f884f8847a953dae1aa6c300c300c300c300c300c300'
+    'c300f88cb784d78c18951274917c979db79d7a957a957a957a957a957a951fb72c632c63'
+    '2c632c63af52ba8c3d954d420c3a394720003947394739473947e9393dae98845ea6398d'
+    'b363f56bf56bed393dae2c3a0602394727123947a91239473947a9127a957a957a957a95'
+    '7a957a957a957a95d052967c7a951d9e7a95bfae2c632c632c632c631c8d7c955a957363'
+    '0c3a20002000e61939473947e300093a3dae156c91637a951ea6bfb63fae94633dae6b4a'
+    '230920002000c300a91239473947a9127a957a955da67a95ae4aef527a957a956e4af36b'
+    '7a957a95b67c91632c632c632c632c639a843e95fb8c1a8df152ec41ec41aa39ca31c929'
+    'a210c7313dae7463aa31ca31ec394d424d42d46b3dae4b42271239473947a7192000a912'
+    'c300a91275747a95fb9d7a95ce4a71637a957a954c4271637a95dfb69a95b67c2c632c63'
+    '2c632c63c310a731b1635674b052cb39f152125b125bd15a9052af523dae3dae577c9a9d'
+    '1ca6315bab31b3633dae6c4ac20039473947573e200020002942a91255747b95bc9dfd9d'
+    'ae4aeb397a957a95a931b9847c9d2e534f5bce4a2c632c632c632c632000200045215674'
+    '198db7736f4a125b125b125b125b704adb9d3dae577cffdfffdfffdf198d97843dae0b3a'
+    '200827123947394720003947c831f88cd784305b715b9fb6577c305b957cfb9dfb9d5eae'
+    '55742000c418e4182c632c632c632c6320002000e831d9845ea67d9d0d42125bd152125b'
+    '125b2e42b36b3dae577cfba5fba55bae3bae58953daeb58408298931c92989396a2acd23'
+    '041163108310a4106829125b125b125b505b1053946b946bf25ab052d0528f4a2c632c63'
+    '2c632c63200020000419b87c6829eb396f4a125b135b125b125b8f4a135b5dae3dae1474'
+    'b8845995fca579953dae3dae4e42cc39125b125b125b125b125b125b125b125b125b125b'
+    'b052904a482947291563d45a98739873b15215632c632c632c632c63200020006521577c'
+    'b04a515bd252125b125b125b125b5463d35a96843dae577c5a951ca63caeb68434743dae'
+    '547c2929ca31125b125b125b125b125b125b125b125b125b125b325b88292d4298739873'
+    '98739873b35a397c2c632c632c632c6320006d631495999d5fc7ffdf1da6c418125b125b'
+    '125b125b125bce523dae577cffdfffdfffdfffdf757c3dae3dae8a31eb39f25a125b125b'
+    '125b115b325b125b125b125bf05211530c3a1463987398739873915215633ea62c632c63'
+    '2c632c63158d979d7aaedcbe9fcffcbe5a958f4a68290b3a0b3a0b3a0b3ac310378d3dae'
+    '577c1dc77fcf5fc7febe9a953dae105b4829f15a125b125b125b125b125b125b125b5363'
+    '115b6d42b152987398739873d25ad45a7d9ddeae2c632c632c632c63b2637caeffdf9fcf'
+    '9fcf9fcfd36b335ba83126210b3a0b3a0b3a42088f633dae577cfba5fba51ca63ca6398d'
+    '3dae3dae2821f15a5363125b125b125b125b125b125b5363d052756b987398739873576b'
+    '3563566bf8847a952c632c632c632c63b6841ba61ebfffdf9fcf9fcf9fcf9363b56ba418'
+    '82100621462148214c423dae577c7cae9db6db9ddb9d398dd98c3dae6829b0524d42c931'
+    '746b125b125b125b956b746b8e4a987398739873976bf45a9873fa8cb263f5732c632c63'
+    '2c632c637cb679959cb69fd79fcf9fcf9fcf9fcff252777c715b0f530a3aa410c7183dae'
+    '3dae577cffdfffdfffdfffdf5a953dae4a3ab152c9310b3a0b3a0b3a0b3a0b3a0b3aae4a'
+    '125b987398739873566bd45a59847fc7bfcfffb62c632c632c632c63febe7995bb95bb95'
+    'bb959fcf9fcf9fcf9fcf7a9dbc9d3a8d787c3674315b515b388d577c3474d36b767c577c'
+    '367c3daed684704a2c4246210c3a2c420b3a0b3a0b3a04195663987398733563f35ad973'
+    '335b0f5355743a8d2c632c632c632c63ffb61985598dbb95bb95bb95bb95bfd79fcf9fcf'
+    '9fcffdbe7cb65995f36b5674f66bb8849a951ca63ca6f884557c3dae3dae8f52ec39a929'
+    'eb392c420b3ac931ea31eb393563f25ad152af52b152597c3474ae4aec39e8202c632c63'
+    '2c632c63fc9d56743da6bb95bb95bb95bb95bb95bb959fcf9fcffba5d99d31745274fdc6'
+    '5bae999d3995198db884d8849b95b984367410534c426829c4182721e41826218829904a'
+    'b1524e4a4e4a0d42b25299841c95fa8cdeb6577c2c632c632c632c63b784398dbfaebb95'
+    'bb95bb95bb95bb95bb959fb6506320002d425dae3ec7ffd7ffe7ffe7dfdf3dc77ecfdcbe'
+    '34743574f46bf36bb984d56b9463b46b105baf4a6f4ab152904a904ab04ad152b56b777c'
+    '7363989ddfd75fc72c632c632c632c634c42f7849eaebb95bb95bb95bb95bb95bb95bc95'
+    'ca3161083363bb959c9dfca59db6debe3ec7dfdf1dc7b5842e5b979dbbb6dcbe1aa6db9d'
+    '9b9d1a8dba84d98cb6849684388dba9d3bae9cb6dcbebbbe6f5bf9a5ffd77fcf2c632c63'
+    '2c632c63fc9dbb95ba95bb95bb95bb95bb95bb95bb957b9568294621bb95bb95bb95bb95'
+    'bb95bb951da65995062123083895ffe7ffe7ffe7ffefffefdfd71dc7b89dcd4a7bb6ffdf'
+    'ffdfffe7ffe7ffe7ffdfffd79caefb9d1c9e9db62c632c632c632c63d784db9d7eae1fbf'
+    'bb95bb95bb95bb95598d1474e518ea395c95bb95bb95bb95bb95bb95bb95f46b2208ca31'
+    '5ea6beae7daebb95bb95bb95bb95bb95ffe7d99d7bae1dbf3caeb99d1aa6999df7845674'
+    '56749363f46b99952c632c632c632c63a4102621a729cd4ad263bb957d9dbb95bb951053'
+    '20006d427c95bb95bb95bb95bb95bb95bb9591632108ce52dfb69eaebb95bb951c9ebc95'
+    'bb95bb95deb6dda59a84777c57951aae19aef694105bb68c58a516953795bbbe2c632c63'
+    '2c632c630a3a26210008200021087b95bb955c95bb95af4a41080b3ab2635ea6bb95bb95'
+    'bb959c9d3ea6ae4a210891631fbfbb95bb95bb95bb95bb95bb95bb95bb955b953663514a'
+    '5bb6dfe7dfe7dfe7dfe7dfe7ffffbfdff9ad747c2c632c632c632c631d9e3574f46b705b'
+    '8931f884bb95bb95bb95777c8e4a4c424c424c424c42fa8c3b9536749263ea398310146c'
+    'bb95bb95bb95bb95bb95bb95bb95bb953fbf5faed773b3525b84dfe7dfe7dfe7dfe7dfe7'
+    'dfe7ffffffff34742c632c632c632c631c9ebb95db95db95b77c0b3a3da65da61c9e1c9e'
+    '73637363bb9555742a3a4c424c424c426d4a0521e518f984bb957a8dbb95bb95bb95bb95'
+    'bb95bb955574d052fa7b766b996b9e9dffefdfe7dfe7dfe7dfe7dfe7dfe7ffff2c632c63'
+    '2c632c63bb95fc9ddc95db95db95505b505b5fbf3da69a95315b577cbb95bb95bb95bb95'
+    'dc9d5a8d6e4a2c42b46bfb8cbb95bb95bb95bb95bb951d9ebb9ddc9d505bed52d673766b'
+    'b873dd8c5db6ffffdfe7dfe7dfe7dfe7dfe79bb62c632c632c632c63dc9ddb95bb95bb95'
+    'db95db952b42398dddb69263b36b1da6bb95bb95bb95bb95bb95777c73639263fda5bb95'
+    'bb95fc9dbb95bb95bb95b36b967c398dbfb63fbf187c135b14631d955d9d3fc7dfd79cb6'
+    '39ae58959995b2632c632c632c632c63dfb6db95fc9dbb959b95db95db950b3abfcf767c'
+    '305b9a950a3a0a3a0a3a0a3a777c9b95315bd77cbb95bb953da6bb95157420002000a410'
+    '062147294b421053d873f25aa931fe94d67319ae5ed75ed75ed75ed75ed75ed72c632c63'
+    '2c632c633574b77cdb95db95db955da6db95f36b2721c93155740e539fae9fae9fae9fae'
+    '0a3a9fae8f4af573bb95bb95bb95bb956e4a3474515b6c42a931420820008410c418f873'
+    '0b3a135b1c7c5bb65ed75ed75ed75ed75ed75ed72c632c632c632c63105b8e4a7263505b'
+    'db95db95db95db950f53a4181ea60a3a598d9fae9fae9fae0a3a767cf15a3faebb95bb95'
+    '6e4a505b5ea6db95db95db95db95db952f536c42ae4ad8735884af521e7c9fbe5ed75ed7'
+    '5ed75ed75ed75ed72c632c632c632c638c4a9163b77c2000f0525574f36b5574777c6e4a'
+    '9fae0a3a9fae598d598d9fae0a3a9263c9316e4a6e4a6e4a598ddb95db95db95db95db95'
+    'db95db95db95db955faeab31f8737a84176359959cb65ed75ed75ed75ed77fcf2c632c63'
+    '2c632c63d98cfc9dad4a0521fd9dffb69fae7a956d42cf529fae0a3a9fae9fae9fae598d'
+    '9163b36326216e4a75749faedb95db95dc9ddb95db95db95db95db95db951fb71b9e966b'
+    '5c84d8733563d7841ba65ed75ed75ed75ed75bae2c632c632c632c633fae7fb6eb392b3a'
+    'ffb67da69daeffb6715bd36b9fae2b3a598d9fae598d0a3afd9d6d4272631b8d5fae9e9d'
+    '7d9d9d9ddc9ddb95db95db95db95db95db95db95deb6177cf35af25a1b84bfa51a9e9263'
+    '35749b9d1a95387c2c632c632c632c634729472947290c3a9fb67eaebdaeffb68d4a9fae'
+    '9fae26219fae598d91630a3a1d9eea395263f46b325b936316741a8d1c9edb95db95db95'
+    'beaeb67cda9dfeb6deb69884d87353633a7c3f9dfd8caf4a4e4a756b135bf35a2c632c63'
+    '2c632c63b7845bae47294729dfb69faedda5dc9d72631885fa8c9fae0a3a0a3a0a3a9fae'
+    '9fae2c425ea6bfaefc9db67c8e4a0521305b967c757cb995b67c2000757cffd7ffb63a8d'
+    '9faddb8cf87bbf947a732d42a931cc394e420c422c632c632c632c639884787c315b4729'
+    '472947294729bb9d7a957363397cfa8cfa8cfa8c9fae9fae9faef46bdb957da6beaedfb6'
+    '715b2000977cfb9d76743574725b8931315bb77cfb9d916388294c42ac310f428a29a929'
+    '07198608a61085082c632c632c632c637c9dbfbefa8c1474525bd884472947294729d56b'
+    '9d8cb05220006729fa8cfa8cfa8c0f53db95db95db953fbfee520621db95db95db95db95'
+    'ffbeffbe9995b58458954d4220008c4a693ac108830083086b3a4d53106c358d2c632c63'
+    '2c632c635abe7edf147414745995beb69c9d587c472947293e9d1053a3002519e410c410'
+    'a310e5189c95db95db95ffe7b26b6e42db95db95db95db95db95db95db95db95db95125b'
+    '6929dc8cbfa5ddbebbc68a31b67cfff7ffeffff72c632c632c632c63168d147414747da6'
+    '5ca6ddbe1ec7b9a5168dba9d472947294100261905112611051168293a8ddb95db95db95'
+    '9584ec39db95db95db95db95db95db95946bb56bbeb615746a313663586bdfc6ffffd584'
+    'ed397fcf5fc75ecf2c632c632c632c6314741474fb9d3cb6ffbe5da63ca6febeffdf7cae'
+    '147459b6472947294729630020008929bfb6db95db95db95b684cb31db95db95db95db95'
+    'db95db95db952608db9d3a952921f973766b3d95ffe7dfdf0821b584ffd7febe2c632c63'
+    '2c632c63d99dbb95fdceffffffffbfeffebe7fbfdc959263babeffff2e3a862947294729'
+    '4729ce523caedb95db953bae757c6929188ddb953ba6378dee52d584f78cf15a1ba61eae'
+    'e718f97bf35a7a841daeffeff2736e42dfd75fc72c632c632c632c63ea293fd7fffffff7'
+    'ffffffeffff79cb614741bcfbfd75f955784b7a5fdce472947294729faa5db95db95ffdf'
+    '1ba66a293895db95fba55895b1639163fba5db951ba65a95ab31145b0c3a335bd8731ec7'
+    'fdbe0921faa5fff72c632c632c632c6338beffffffffffffffff7ecffcc6926bbbbebfd7'
+    '7e9d9ba51dcf3abe3ab6f784947c5ecf7fbeb9733ca6ffd79db6cc397895db95db95db95'
+    'db95db95db95db953aaeba842b42ef5a0719b56b1d7c5b9dfcce4b422c3abbc62c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c632c63'
+    '2c632c632c632c632c632c63')
+# BOSS PORTRAITS END
+
+
+def boss_icon_tiles():
+    """The two portraits, 48 tiles each in reading order (6 by 8)."""
+    tiles = []
+    for p in range(2):
+        px = BOSS_PORTRAITS[p * 48 * 64 * 2:(p + 1) * 48 * 64 * 2]
+        for i in range(48):
+            r, c = divmod(i, 6)
+            tiles.append(b''.join(
+                px[((r * 8 + y) * 48 + c * 8) * 2:
+                   ((r * 8 + y) * 48 + c * 8 + 8) * 2] for y in range(8)))
+    return tiles
 
 
 FEATURES = [
@@ -7132,7 +19508,333 @@ FEATURES = [
          # Only the tile indices are here; escrgame.bin holds the tiles and
          # is written after the executable, and backed up the same way.
          (BANNER_TABLE, '000001000200030004000500060007000800090007000a000b000c000d000e000f00100011001200040004001300090004001400150004001600170007000800180019001a001b001c0014001d001e001f0020002100220023002400250026002700280029002a002b002c002d002e002f0030003100320033003400350036003700380039003a003b003c003d003e00280029003f003a0040004100420043004400450046004700480049004a004b004c004a004d004e004f0050005100520053005400550056005700580059005a005b005c005d005e005f0060006100620063004d004e004f006400650066006700680069006a006b006c004a00', BANNER_NEW)]),
+
+    ('bosses', 'Playable bosses',
+     'Jaguarandi and Z-Gradt, in a one-player game, once\n'
+     'unlocked.\n'
+     '\n'
+     'Unlock\tBeat Jaguarandi on Very Hard without losing a match\n'
+     '\tin the run, and it joins the select. Finish the game\n'
+     '\twith any machine the same way for Z-Gradt. Each is\n'
+     '\tannounced on a screen of its own. Kept in bosses.bin\n'
+     '\tbeside the game.\n'
+     'Select\tAn unlocked boss stands in the row after Raiden with\n'
+     '\tits own portrait, and the countdown gives 20 seconds\n'
+     '\tmore to reach it.\n'
+     'Colour\tWith Machine Color Select on, up and down on a boss\n'
+     '\tgive it any of the colours the eight have.', [
+         # The select: the bosses' palettes and Z-Gradt's lift, from the
+         # loop's idle call, both sites.
+         #
+         #   call tick
+         (0x001c5b79, 'e8b3fdffff', call(0x001c5b79, ('BOSSES', 'tick'))),
+         (0x001c5bbb, 'e871fdffff', call(0x001c5bbb, ('BOSSES', 'tick'))),
+         # Confirm, both paths: the armed boss is stored in place of the
+         # machine under the cursor, and that machine's colour recorded.
+         #
+         #   call confirm_a
+         #   nop x5
+         (0x0019f8c1, 'a3380cae01a1380cae01', call(0x0019f8c1, ('BOSSES', 'confirm_a'), 5)),
+         (0x001a0e84, 'a3380cae01a1380cae01', call(0x001a0e84, ('BOSSES', 'confirm_a'), 5)),
+         # The palette loaders send ids above 7 to a fixed table; their jg
+         # comes to the colour instead.
+         (0x000f29a5, '86000000', rel(0x000f29a5, ('BOSSES', 'pal_a'))),
+         # PLAYER DATA: a boss's turning model drawn by its own fight object,
+         # and its name from the patch's own strings.
+         (0x0006018b, 'e80d000000', call(0x0006018b, ('BOSSES', 'model_ra'))),
+         # and load identity, which loads the report's turntable instead
+         # while that draw runs. jmp, nop
+         (0x00007ae0, '558bec535657', jump(0x00007ae0, ('BOSSES', 'ident_a'), 1)),
+         # and the shadow draws, a machine's and Z-Gradt's, skipped while
+         # it does.
+         (0x0006a969, 'a154d24503', jump(0x0006a969, ('BOSSES', 'noshade_a'))),
+         (0x000041b7, '813d182da0009a000000', jump(0x000041b7, ('BOSSES', 'nozshade_a'), 5)),
+         # The ending as a boss: its camera's move, Z-Gradt's charge and
+         # laser in phase 0, its setup at no attack, its beam over the
+         # floor's height, its fly-out's draw, and Jaguarandi drawn with
+         # its head (asm/bosses.asm, ETRANS to JPOSE).
+         (0x0018a4fd, 'e81ed6e7ff', call(0x0018a4fd, ('BOSSES', 'etrans_a'))),
+         (0x0018fcba, 'e80db9ffff', call(0x0018fcba, ('BOSSES', 'zend_a'))),
+         (0x001b82b8, 'e8b8d4e4ff', call(0x001b82b8, ('BOSSES', 'zinit_a'))),
+         (0x001b830d, 'e863d4e4ff', call(0x001b830d, ('BOSSES', 'zinit_a'))),
+         (0x00189e7e, '8b45f00500060000', jump(0x00189e7e, ('BOSSES', 'zbeam_a'), 3)),
+         (0x000062fc, 'e841d1ffff', call(0x000062fc, ('BOSSES', 'zfly_draw_a'))),
+         (0x001b7f80, 'e8d102ebff', call(0x001b7f80, ('BOSSES', 'jpose_a'))),
+         (0x001c1622, 'e809d6ecff', call(0x001c1622, ('BOSSES', 'zwall_a'))),
+         # The lineup: two boss slots after Raiden, the cursor to 9, the
+         # cursor's tables ten long, a boss's text and name.
+         (0x001a171d, 'c70588b24503b8186200', call(0x001a171d, ('BOSSES', 'selscr_a'), 5)),
+         (0x0019f476, '833c8568bd450307', call(0x0019f476, ('BOSSES', 'selmax_a'), 3)),
+         # and its steps right and left, over Jaguarandi's bay when
+         # Z-Gradt alone is unlocked
+         (0x0019f48f, 'ff048568bd4503', call(0x0019f48f, ('BOSSES', 'selinc_a'), 2)),
+         (0x0019f3e9, 'ff0c8568bd4503', call(0x0019f3e9, ('BOSSES', 'seldec_a'), 2)),
+         (0x001a0a6b, 'ff048568bd4503', call(0x001a0a6b, ('BOSSES', 'selinc_a'), 2)),
+         (0x001a09c5, 'ff0c8568bd4503', call(0x001a09c5, ('BOSSES', 'seldec_a'), 2)),
+         (0x001a17ec, '8b048598186200', call(0x001a17ec, ('BOSSES', 'selinit_a'), 2)),
+         (0x0019f4cc, '833d58ea6b0000', call(0x0019f4cc, ('BOSSES', 'selcol_a'), 2)),
+         (0x0019bf93, '558bec83ec30', jump(0x0019bf93, ('BOSSES', 'selmdl_a'), 1)),
+         (0x0019bff7, '08176200', abs32(('BOSSES', 'selrows'))),
+         # Jaguarandi's head on its chest, and the per-machine part
+         # tables of the select's model ten long.
+         (0x0019cd94, 'e8dd6bf7ff', call(0x0019cd94, ('BOSSES', 'selpart_a'))),
+         (0x0019c2e7, '681d6200', abs32(('BOSSES', 'seld68'))),
+         (0x0019c850, '681d6200', abs32(('BOSSES', 'seld68'))),
+         (0x0019c973, '681d6200', abs32(('BOSSES', 'seld68'))),
+         (0x0019caaa, '681d6200', abs32(('BOSSES', 'seld68'))),
+         (0x0019cbf3, '681d6200', abs32(('BOSSES', 'seld68'))),
+         (0x0019c6ab, 'a81d6200', abs32(('BOSSES', 'selda8'))),
+         # The launch's camera, from the machine taken: the bosses' own,
+         # not the cursor's as if one of the eight.
+         (0x0019fc26, '83e007', '83e00f'),
+         (0x0019fc3d, '701e6200', abs32(('BOSSES', 'sellcam'), 8)),
+         (0x0019fc64, '6c1e6200', abs32(('BOSSES', 'sellcam'), 4)),
+         (0x0019fc97, '701e6200', abs32(('BOSSES', 'sellcam'), 8)),
+         (0x0019fccb, '681e6200', abs32(('BOSSES', 'sellcam'))),
+         # The floor shown as the launch goes: a boss's as Raiden's.
+         (0x0019cfeb, 'a1380cae01', call(0x0019cfeb, ('BOSSES', 'selfloor_a'))),
+         # The palettes loaded entering the select: on a boss, Raiden's.
+         (0x001a18a5, '8b048568bd4503', call(0x001a18a5, ('BOSSES', 'selpalev_a'), 2)),
+         # Z-Gradt in sight from Jaguarandi's place.
+         (0x0019d80b, 'dc05f81f6200', call(0x0019d80b, ('BOSSES', 'selcull_a'), 1)),
+         # No launch sled under Z-Gradt.
+         (0x0019ec20, '833c852cbd450300', call(0x0019ec20, ('BOSSES', 'selsled_a'), 3)),
+         # The outside in sight as soon as Z-Gradt gets there.
+         (0x0019d413, 'a1780aad01', call(0x0019d413, ('BOSSES', 'selsky_a'))),
+         # The bosses' weapons named in battle, as on the select - right,
+         # left, both - in each side's data: Jaguarandi's as the Sega Ages
+         # release names them, Z-Gradt's after the eight's, F MINE as the
+         # game shortens Bal-Bas-Bow's (a strip fits ten letters; its laser
+         # cannon is on no button). Then Z-Gradt's name in its headers,
+         # ZIG-RAHT as shipped, which the attract's TODAY'S TOP OF WINS
+         # prints.
+         (0x0023b5d4, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000',
+          '42415a4f4f4b410000000000000000005452415020424f4d42000000000000003130204c415345520000000000000000'),
+         (0x0023bca4, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e00000000000000',
+          '42415a4f4f4b410000000000000000005452415020424f4d42000000000000003130204c415345520000000000000000'),
+         (0x0023cdb4, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000',
+          '52494e47204245414d000000000000005048414c414e5800000000000000000046204d494e45000000000000000000005a2d4752414454000000000000000000'),
+         (0x0023d484, '522d574541504f4e00000000000000004c2d574541504f4e0000000000000000524c2d574541504f4e000000000000005a49472d524148540000000000000000',
+          '52494e47204245414d000000000000005048414c414e5800000000000000000046204d494e45000000000000000000005a2d4752414454000000000000000000'),
+         # The scoreboard's names of the two, misspelt in the game's own
+         # table (Z-GRAT, JAGARANDI).
+         (0x002bb008, b'Z-GRAT     \0JAGARANDI  \0'.hex(), b'Z-GRADT    \0JAGUARANDI \0'.hex()),
+         # Jaguarandi's win and lose poses held at their last frame, not
+         # played over.
+         (0x0010d6d4, '99f7f96689152a146503', call(0x0010d6d4, ('BOSSES', 'pose_a'), 5)),
+         (0x0010d7b5, '99f7f96689152a146503', call(0x0010d7b5, ('BOSSES', 'pose_a'), 5)),
+         # Z-Gradt's spray over the sea where it skims.
+         (0x0019e241, '3b048d90b24503', call(0x0019e241, ('BOSSES', 'selspray_a'), 2)),
+         # Z-Gradt's height in its launch its own.
+         (0x0019db28, 'd91c85c4b24503', call(0x0019db28, ('BOSSES', 'selzy_a'), 2)),
+         (0x0019db81, 'd91c85c4b24503', call(0x0019db81, ('BOSSES', 'selzy_a'), 2)),
+         (0x0019e0c2, 'd91c85c4b24503', call(0x0019e0c2, ('BOSSES', 'selzy_a'), 2)),
+         (0x0019e0f9, 'd91c85c4b24503', call(0x0019e0f9, ('BOSSES', 'selzy_a'), 2)),
+         # Confirming hides the eight (objects 2 to 9) and launches the one
+         # taken: the bosses' two objects as well.
+         #
+         #   call selhide_a
+         #   nop x5
+         (0x0019f9be, '837dac0a0f8d17000000', call(0x0019f9be, ('BOSSES', 'selhide_a'), 5)),
+         # The Quick VR Select, the game's option, has the same in its own
+         # code: the cursor's limit, the colour select, the hiding; and its
+         # texts for a cursor.
+         (0x001a0a52, '833c8568bd450307', call(0x001a0a52, ('BOSSES', 'selmax_a'), 3)),
+         (0x001a0aa8, '833d58ea6b0000', call(0x001a0aa8, ('BOSSES', 'selcol_a'), 2)),
+         (0x001a0f81, '837dac0a0f8d17000000', call(0x001a0f81, ('BOSSES', 'selhide_a'), 5)),
+         (0x001a08eb, 'e886feffff', call(0x001a08eb, ('BOSSES', 'selqinfo_a'))),
+         # The camera's step to a boss and back.
+         (0x0019f6f4, 'dc2508206200', call(0x0019f6f4, ('BOSSES', 'selstep_sube'), 1)),
+         (0x0019f71e, 'dc2508206200', call(0x0019f71e, ('BOSSES', 'selstep_sub'), 1)),
+         (0x0019f780, 'dc0508206200', call(0x0019f780, ('BOSSES', 'selstep_adde'), 1)),
+         (0x0019f7aa, 'dc0508206200', call(0x0019f7aa, ('BOSSES', 'selstep_add'), 1)),
+         # The portraits along the bottom, two more wide: the bosses'.
+         (0x000cfc2f, '37', '45'),
+         (0x000cfc31, 'ba109300', abs32(('BOSSES', 'selrow'))),
+         (0x000cfc45, '37', '45'),
+         (0x000cfc47, 'ba109300', abs32(('BOSSES', 'selrow'))),
+         (0x000cfcd1, '37', '45'),
+         (0x000cfcd3, 'ba109300', abs32(('BOSSES', 'selrow'))),
+         (0x000cfce7, '37', '45'),
+         (0x000cfce9, 'ba109300', abs32(('BOSSES', 'selrow'))),
+         # With both bosses unlocked, columns left to fit the screen, the
+         # title after them back where it was, and with them the 1P/2P marks
+         # over a portrait and the frame around it (asm/bosses.asm, selrowx).
+         (0x000cfc15, '83055877bf0002', call(0x000cfc15, ('BOSSES', 'selrowx'), 2)),
+         (0x000cfcb7, '83055877bf0002', call(0x000cfcb7, ('BOSSES', 'selrowx'), 2)),
+         (0x000cfc53, '83055877bf000c', call(0x000cfc53, ('BOSSES', 'seltitlex'), 2)),
+         (0x000cfcf5, '83055877bf000c', call(0x000cfcf5, ('BOSSES', 'seltitlex'), 2)),
+         (0x000d087f, '8d0445a630cc01', call(0x000d087f, ('BOSSES', 'selmark1'), 2)),
+         (0x000d08d7, '8d0445ae30cc01', call(0x000d08d7, ('BOSSES', 'selmark2'), 2)),
+         (0x000d094d, '8d0445f218cc01', call(0x000d094d, ('BOSSES', 'selframe1'), 2)),
+         (0x000d09b0, '8d0445fa18cc01', call(0x000d09b0, ('BOSSES', 'selframe2'), 2)),
+         # The marks' row is cleared before they are drawn: the clear starts
+         # the shift earlier and goes that much further, in the hangar and in
+         # the quick select.
+         (0x000d3991, 'c745f81f000000', call(0x000d3991, ('BOSSES', 'selclr_a'), 2)),
+         (0x000d39d5, 'c745f81f000000', call(0x000d39d5, ('BOSSES', 'selclr_a'), 2)),
+         # The texture bank in half 1, noted as it is loaded.
+         (0x001beb70, 'e85617f5ff', call(0x001beb70, ('BOSSES', 'unl_ldtex'))),
+         (0x001802cb, 'e8fbfff8ff', call(0x001802cb, ('BOSSES', 'unl_ldtex'))),
+         (0x001a18fb, 'e8cbe9f6ff', call(0x001a18fb, ('BOSSES', 'unl_ldtex'))),
+         # A polygon as it is queued: a boss's palette rows turned to its
+         # own on the select.
+         (0x001d39b1, '8b3504b56d00', call(0x001d39b1, ('BOSSES', 'selcol'), 1)),
+         (0x001d4704, '8b3504b56d00', call(0x001d4704, ('BOSSES', 'selcol'), 1)),
+         (0x001de8c1, '8b3504b56d00', call(0x001de8c1, ('BOSSES', 'selcol'), 1)),
+         (0x001df654, '8b3504b56d00', call(0x001df654, ('BOSSES', 'selcol'), 1)),
+         # The countdown, longer with a boss unlocked.
+         (0x0019f317, 'b8eb040000', call(0x0019f317, ('BOSSES', 'seltime'))),
+         (0x001a08f3, 'b8eb040000', call(0x001a08f3, ('BOSSES', 'seltime'))),
+         # Unlocking: a lost match, Jaguarandi's stage won, the credits'
+         # end, the report's text and its state 0x1e (asm/bosses.asm).
+         (0x000b3bbe, 'ff053035ae01', call(0x000b3bbe, ('BOSSES', 'unl_lost'), 1)),
+         (0x000b3e5b, 'c7059036ae011c000000', call(0x000b3e5b, ('BOSSES', 'unl_jag'), 5)),
+         (0x0018fd0f, 'c7059036ae0116000000', call(0x0018fd0f, ('BOSSES', 'unl_z'), 5)),
+         (0x000cc723, 'e87844f9ff', call(0x000cc723, ('BOSSES', 'unl_text'))),
+         (0x001fe638, 'ef084600', abs32(('BOSSES', 'unl_logic'))),
+         # A boss's text on the select, the tables of an object's and a
+         # cursor's machine ten long (selt0), and its name on the report.
+         (0x0019f30f, 'e89ccaffff', call(0x0019f30f, ('BOSSES', 'selinfo_a'))),
+         (0x001a1764, 'e847a6ffff', call(0x001a1764, ('BOSSES', 'selinfo_a'))),
+         (0x0019d8e5, '70186200', abs32(('BOSSES', 'selt0'))),
+         (0x0019dc03, '70186200', abs32(('BOSSES', 'selt0'))),
+         (0x0019dd4a, '70186200', abs32(('BOSSES', 'selt0'))),
+         (0x0019df8a, '70186200', abs32(('BOSSES', 'selt0'))),
+         (0x0019e209, '70186200', abs32(('BOSSES', 'selt0'))),
+         (0x0019e3f8, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019e590, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019e728, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019e8cf, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019eae2, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019f6a5, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019f8bd, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019f8ec, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019f91f, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x0019fc2c, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x001a0c81, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x001a0e80, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x001a0eaf, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x001a0ee2, '78186200', abs32(('BOSSES', 'selt0'), 8)),
+         (0x00061070, 'a1380cae018d04408d04800578bb5f00', call(0x00061070, ('BOSSES', 'name_a'), 11)),
+         # The round's animation tables have no rows for the bosses: past the
+         # loads, the deref and mode 0xa's.
+         (0x000f39b5, 'a1a40cae01', jump(0x000f39b5, ('BOSSES', 'loads_a'))),
+         (0x000f3a2b, '837df4000f844f000000', jump(0x000f3a2b, ('BOSSES', 'deref_a'), 5)),
+         (0x000f3b9f, 'a1a40cae01', jump(0x000f3b9f, ('BOSSES', 'case2_a'))),
+         # The ending: a boss goes to the success text and on, without the
+         # turn to shoot.
+         (0x0018fc68, '833d6409ad01000f854f000000', jump(0x0018fc68, ('BOSSES', 'end_a'), 8)),
+         # Z-Gradt's camera: the round's opening shots' eye, the chase
+         # camera's distance and pitch as its mode sets them,
+         (0x000db986, 'e895c1f2ff', call(0x000db986, ('BOSSES', 'cam_4'))),
+         (0x0011297d, '8b45fc0fbf401e', jump(0x0011297d, ('BOSSES', 'live_a'), 2)),
+         # and the bosses' where the eye is placed: the radius for x and for
+         # z, and the height.
+         (0x001129f8, '8b45fcd84840', call(0x001129f8, ('BOSSES', 'zeye_a'), 1)),
+         (0x00112a2c, '8b45fcd84840', call(0x00112a2c, ('BOSSES', 'zeye_a'), 1)),
+         (0x00112a60, '8b45fcd84840', call(0x00112a60, ('BOSSES', 'zeye_a'), 1)),
+         # Z-Gradt against Z-Gradt, the last stage: init, fly-in, timer,
+         # clip bank, model header and AI state, for the player's alone.
+         (0x00005775, '558bec535657', jump(0x00005775, ('BOSSES', 'init_a'), 1)),
+         (0x000071d1, '558bec83ec0c535657', jump(0x000071d1, ('BOSSES', 'fly_a'), 4)),
+         (0x00006335, '833d182da000000f8d2d060000', jump(0x00006335, ('BOSSES', 'tm_2'), 8)),
+         (0x000061f4, '833d182da000000f8df7000000', jump(0x000061f4, ('BOSSES', 'tm_4'), 8)),
+         (0x001b642c, '0fbf403085c00f851a000000', jump(0x001b642c, ('BOSSES', 'clip_a'), 7)),
+         (0x0000594e, '558bec83ec44535657', jump(0x0000594e, ('BOSSES', 'clone_a'), 4)),
+         (0x001b80c8, '558bec83ec04535657', jump(0x001b80c8, ('BOSSES', 'ai_a'), 4)),
+         # Z-Gradt's gold: who posted the palette event, and the handlers'
+         # slot choice for 0x200 and 0x21f made from it.
+         (0x00006321, 'a1342ca000a308524103', call(0x00006321, ('BOSSES', 'zpost_a'), 5)),
+         (0x000f3e48, '837df4000f8423000000', jump(0x000f3e48, ('BOSSES', 'zrest_a'), 5)),
+         (0x000f3ecd, '837df4000f8423000000', jump(0x000f3ecd, ('BOSSES', 'zgold_a'), 5)),
+         # Its palettes darkening as it dies: a player's Z-Gradt keeps its own.
+         (0x000f3f3d, '837df4000f8433000000', jump(0x000f3f3d, ('BOSSES', 'zdark_a'), 5)),
+         (0x000f3fcd, '837df4000f8433000000', jump(0x000f3fcd, ('BOSSES', 'zfade_a'), 5)),
+         # Z-Gradt's fly-in started near its drop indoors.
+         (0x0000593f, 'c705182da00000000000', call(0x0000593f, ('BOSSES', 'zflyin_a'), 5)),
+         # The player's Z-Gradt's moves ask the arena's floor, not its own
+         # box, on every stage but the last; the CPU's keeps its box: the
+         # three calls to its query.
+         #
+         #   call zfloor_a
+         (0x0000655f, 'e859f1ffff', call(0x0000655f, ('BOSSES', 'zfloor_a'))),
+         (0x000066c6, 'e8f2efffff', call(0x000066c6, ('BOSSES', 'zfloor_a'))),
+         (0x000068b3, 'e805eeffff', call(0x000068b3, ('BOSSES', 'zfloor_a'))),
+         # Its super laser on Dash, the turbo bytes, in place of Guard's:
+         # the trigger's load of the byte it fires on.
+         (0x00007928, '8b450833c98a883b010000', call(0x00007928, ('BOSSES', 'zfire_a'), 6)),
+         # The KO replay's ring: Z-Gradt's AI globals kept and put back
+         # with object A, at the mov ecx, 0x180 before each copy - the
+         # ten restores, the ring's fill at a round's start, the recorder.
+         (0x00102083, 'b980010000', call(0x00102083, ('BOSSES', 'zring_a'))),
+         (0x00102593, 'b980010000', call(0x00102593, ('BOSSES', 'zring_a'))),
+         (0x00103357, 'b980010000', call(0x00103357, ('BOSSES', 'zring_a'))),
+         (0x001033dd, 'b980010000', call(0x001033dd, ('BOSSES', 'zring_a'))),
+         (0x001034cd, 'b980010000', call(0x001034cd, ('BOSSES', 'zring_a'))),
+         (0x00103553, 'b980010000', call(0x00103553, ('BOSSES', 'zring_a'))),
+         (0x0010360b, 'b980010000', call(0x0010360b, ('BOSSES', 'zring_a'))),
+         (0x00103686, 'b980010000', call(0x00103686, ('BOSSES', 'zring_a'))),
+         (0x00106baf, 'b980010000', call(0x00106baf, ('BOSSES', 'zring_a'))),
+         (0x00106c39, 'b980010000', call(0x00106c39, ('BOSSES', 'zring_a'))),
+         (0x001072a8, 'b980010000', call(0x001072a8, ('BOSSES', 'zring_a'))),
+         (0x001029ed, 'b980010000', call(0x001029ed, ('BOSSES', 'zring_a'))),
+         # Jaguarandi's red segments, its luminous polygons, one depth
+         # bucket nearer than the faces they lie on: the mesh draw's store
+         # of a four-sided polygon's key.
+         (0x001d4ebb, 'a3f0867000', call(0x001d4ebb, ('BOSSES', 'jlum_a'))),
+         # Z-Gradt's three strips in the live colour while their button is
+         # down: each strip's push of the ready material before its draw.
+         (0x0015c93e, '68701a7900', call(0x0015c93e, ('BOSSES', 'zbar_ra'))),
+         (0x0015cb77, '68701a7900', call(0x0015cb77, ('BOSSES', 'zbar_la'))),
+         (0x0015cdb0, '68701a7900', call(0x0015cdb0, ('BOSSES', 'zbar_ba'))),
+         # Z-Gradt's laser gauge, a fourth strip under the HUD's three: the
+         # weapon strips' epilogue (pop edi, esi, ebx; leave; ret).
+         (0x0015ce2b, '5f5e5bc9c3', jump(0x0015ce2b, ('BOSSES', 'zgauge_a'))),
+         # GET READY's end, both paths: held while the player's Z-Gradt,
+         # or the one it faces, is still coming down.
+         (0x000b2098, '833d0420ae0100', call(0x000b2098, ('BOSSES', 'zready_a'), 2)),
+         (0x000b21b1, '833d0420ae0100', call(0x000b21b1, ('BOSSES', 'zready_a'), 2)),
+         # The win and lose camera's distance, wherever a shot sets it,
+         # and the replay's view translate.
+         (0x0010e939, 'd91d0885bf00', call(0x0010e939, ('BOSSES', 'win_1t'), 1)),
+         (0x0010ede5, 'd91d0885bf00', call(0x0010ede5, ('BOSSES', 'win_1'), 1)),
+         (0x0010f06d, 'd91d0885bf00', call(0x0010f06d, ('BOSSES', 'win_1t'), 1)),
+         (0x0010f32a, 'd91d0885bf00', call(0x0010f32a, ('BOSSES', 'win_1t'), 1)),
+         (0x0010fb12, 'd91d0885bf00', call(0x0010fb12, ('BOSSES', 'win_1'), 1)),
+         (0x0010fbf7, 'd91d0885bf00', call(0x0010fbf7, ('BOSSES', 'win_1'), 1)),
+         (0x0010fcf6, 'd91d0885bf00', call(0x0010fcf6, ('BOSSES', 'win_1'), 1)),
+         (0x0010fedc, 'd91d0885bf00', call(0x0010fedc, ('BOSSES', 'win_1'), 1)),
+         (0x00110109, 'd91d0885bf00', call(0x00110109, ('BOSSES', 'win_1'), 1)),
+         (0x0010f8a1, 'c7050885bf0000000c42', call(0x0010f8a1, ('BOSSES', 'win_1a'), 5)),
+         (0x0010f8b0, 'c7050885bf000000f041', call(0x0010f8b0, ('BOSSES', 'win_1b'), 5)),
+         (0x0010325f, 'e8bc48f0ff', call(0x0010325f, ('BOSSES', 'rep_1'))),
+         (site('BOSSES'), zeros('BOSSES'), blob('BOSSES'))]),
+
+    # No sites: written beside the game as bosses.bin, the progress the
+    # bosses patch keeps (see Patcher._write_unlocks).
+    ('bossunlock', 'Pre-unlock the bosses',
+     'Both bosses selectable from the start, without earning\n'
+     'them. Needs Playable bosses.\n'
+     '\n'
+     'Earning\tWithout this, Jaguarandi is unlocked by beating it on\n'
+     '\tVery Hard without losing a match in the run, and\n'
+     '\tZ-Gradt by finishing the game with any machine the\n'
+     '\tsame way.\n'
+     'File\tbosses.bin beside the game, which keeps the unlocks.\n'
+     '\tProgress already made is never taken back.', []),
 ]
+
+
+# The bosses patch's progress beside the game (asm/bosses.asm, unl_file):
+# a dword, 0 none unlocked, 1 Jaguarandi, 2 both.
+BOSSES_FILE = 'bosses.bin'
+BOSSES_ALL = 2
+
+# A patch that does nothing without another: skipped, and said so, when
+# that one is not ticked.
+NEEDS = {'bossunlock': 'bosses'}
+
 
 def features(build):
     """The site table as this build needs it: each site at its own offset,
@@ -7240,7 +19942,7 @@ ESSENTIAL = ('nocpucheck', 'framerate', 'continuefix', 'lockline', 'dinput',
 # CPU, a crash on a lost round, a third of the frame rate, dead keys after
 # ALT+TAB. Two of them are also what internet play needs.
 EXTRA = ('hires', 'padxinput', 'nodisc', 'debugbox', 'defaults', 'sound',
-         'movie')
+         'movie', 'bosses', 'bossunlock')
 # Its own group so it stays out of the patch list: it fixes nothing and
 # undoes nothing the game does, so it belongs beside the version and the
 # link rather than among the patches. Ticked by default all the same.
@@ -7285,9 +19987,7 @@ def _check_table(build=RETAIL):
                                      % (key, off, len(old) // 2,
                                         len(new) // 2))
             old_b, new_b = bytes.fromhex(old), bytes.fromhex(new)
-            end = build.size
-            if build.annex:
-                end = build.annex[1] + annex_layout(build)[1]
+            end = file_end(build)
             if off + len(old_b) > end:
                 raise AssertionError('%s at 0x%08x runs %d bytes past the end'
                                      % (key, off, off + len(old_b) - end))
@@ -7315,8 +20015,12 @@ for _build in BUILDS.values():
                 raise
 
 
+# Extras that change how the game plays rather than fix it, so start unticked.
+OPT_IN = ('bosses', 'bossunlock')
+
+
 def default_state():
-    return {key: True for key in BY_KEY}
+    return {key: key not in OPT_IN for key in BY_KEY}
 
 
 def apply_feature(buf, sites):
@@ -8823,9 +21527,10 @@ class _PE:
         unit = self.salign
         return (last['vaddr'] + last['vsize'] + unit - 1) // unit * unit
 
-    def add_section(self, name, payload, chars=0xE0000040):
+    def add_section(self, name, payload, chars=0xE0000040, vsize=0):
         """Append a section rather than borrow padding: .text has no room
-        left and the zero runs in .data are globals the game writes."""
+        left and the zero runs in .data are globals the game writes. A
+        vsize past the payload is mapped too, zeroed by the loader."""
         def up(value, unit):
             return (value + unit - 1) // unit * unit
 
@@ -8841,15 +21546,16 @@ class _PE:
         rsize = up(len(payload), self.falign)
         self.d += payload + b'\0' * (rsize - len(payload))
 
+        vsize = max(vsize, len(payload))
         struct.pack_into('<8sIIII', self.d, hdr, name.encode('ascii')[:8],
-                         len(payload), vaddr, rsize, raddr)
+                         vsize, vaddr, rsize, raddr)
         struct.pack_into('<I', self.d, hdr + 36, chars)
         struct.pack_into('<H', self.d, self.pe + 6, self.nsec + 1)
         struct.pack_into('<I', self.d, self.opt + 56,
-                         up(vaddr + len(payload), self.salign))
+                         up(vaddr + vsize, self.salign))
         self.nsec += 1
         self.sections.append({'name': name.encode('ascii'),
-                              'vsize': len(payload), 'vaddr': vaddr,
+                              'vsize': vsize, 'vaddr': vaddr,
                               'rsize': rsize, 'raddr': raddr})
         return vaddr
 
@@ -8959,17 +21665,30 @@ class PatchFailed(Exception):
         self.key = key
 
 
-def apply_annex(buf, build):
+def apply_annex(buf, build, wanted):
     """Append the build's annex, empty: the site table writes the blobs into
     it like any cave. It has to land where the tables say, which the file's
     own headers guarantee for the first section appended. Always applied,
-    so the essentials can rely on it - the timer stub is there."""
+    so the essentials can rely on it - the timer stub is there.
+
+    The build's own sections follow, each only when its patch is wanted,
+    empty too: the blob's bytes up to its last that is not zero, the rest
+    virtual. Nothing else has been appended yet, so they land where
+    own_place() says."""
     va, raw, _names = build.annex
     _layout, length = annex_layout(build)
     pe = _PE(buf)
     if len(pe.d) != raw or pe.base + pe.next_rva() != va:
         raise ValueError('the annex would not land at 0x%08x' % va)
     pe.add_section('.vojp', b'\0' * length, chars=0xE0000040)
+    for name, (va, raw) in own_place(build).items():
+        section, key = OWN_SECTIONS[name]
+        if not wanted.get(key):
+            continue
+        if len(pe.d) != raw or pe.base + pe.next_rva() != va:
+            raise ValueError('%s would not land at 0x%08x' % (section, va))
+        pe.add_section(section, b'\0' * own_len(name), chars=0xE0000040,
+                       vsize=len(blob_of(name)[0]))
     return pe.d
 
 
@@ -8987,7 +21706,7 @@ def apply_selected(buf, wanted, build=RETAIL):
     """
     applied, skipped = [], []
     table = by_key(build)
-    buf = apply_annex(buf, build)
+    buf = apply_annex(buf, build, wanted)
     for key in apply_order():
         if not wanted.get(key):
             continue
@@ -9006,6 +21725,10 @@ def apply_selected(buf, wanted, build=RETAIL):
                 raise PatchFailed(key, exc) from exc
             applied.append(key)
             continue
+        need = NEEDS.get(key)
+        if need and not wanted.get(need):
+            skipped.append((key, 'it needs %s' % BY_KEY[need][0]))
+            continue
         sites = table[key][2]
         try:
             if sites is not None:
@@ -9016,6 +21739,9 @@ def apply_selected(buf, wanted, build=RETAIL):
                 buf = apply_extras_template(buf, build)
             if key == 'nodisc':          # bytes first, then the section
                 buf = apply_cdaudio(buf)
+            if key == 'bosses':          # the select writes BS_FRX
+                _make_writable(buf, _PE(buf),
+                               build.off(build.symbols['BS_FRX']))
         except ValueError as exc:
             if sites is None:            # signature miss, not fatal
                 skipped.append((key, exc))
@@ -9174,8 +21900,8 @@ class Patcher:
 
         if not applied:
             if skipped:
-                log.append('patch: %s was the only one selected and its '
-                           'call site was not found' % BY_KEY[skipped[0][0]][0])
+                log.append('patch: %s was the only one selected and it was '
+                           'skipped' % BY_KEY[skipped[0][0]][0])
                 log.append(NOTHING)
             else:
                 log.append('patch: nothing selected, nothing written')
@@ -9189,7 +21915,7 @@ class Patcher:
         if not writable:
             return False, log + [_note(why), NOTHING]
 
-        if 'padxinput' in applied:
+        if 'padxinput' in applied or 'bosses' in applied:
             ready, why = self._banner_ready()
             if not ready:
                 return False, log + [_note(why), NOTHING]
@@ -9224,9 +21950,12 @@ class Patcher:
         log.append('patch: wrote %s' % self.exe_path)
         if 'padxinput' in applied:
             self._retire_ini(log)
-            self._write_banner(log)
+        if 'padxinput' in applied or 'bosses' in applied:
+            self._write_banner(log, applied)
         if 'credits' in applied:
             self._write_credits(log)
+        if 'bossunlock' in applied:
+            self._write_unlocks(log)
         return True, log
 
     def can_restore(self):
@@ -9299,7 +22028,8 @@ class Patcher:
         path = os.path.join(os.path.dirname(self.exe_path), self.build.art[0])
         if not os.path.exists(path):
             return False, ('%s is missing. XInput gamepad support renames the '
-                           'title prompt, which is artwork in that file.'
+                           'title prompt and Playable bosses adds the '
+                           "select's portraits, artwork in that file."
                            % self.build.art[0])
         try:
             with open(path, 'rb') as fh:
@@ -9416,10 +22146,42 @@ class Patcher:
             return False
         return True
 
-    def _write_banner(self, log):
+    def _write_unlocks(self, log):
+        """Both bosses unlocked in bosses.bin, the dword the bosses patch
+        keeps its progress in (0 none, 1 Jaguarandi, 2 both, 3 Z-Gradt
+        alone). The player's progress, so no backup and nothing put back
+        on restore - the unpatched game never reads it - and never
+        lowered. A value above 3 is not progress: the blob's unl_load
+        reads it as none, so it is written over like a 0."""
+        path = os.path.join(os.path.dirname(self.exe_path), BOSSES_FILE)
+        try:
+            with open(path, 'rb') as fh:
+                have = int.from_bytes(fh.read(4).ljust(4, b'\0'), 'little')
+        except OSError:
+            have = 0
+        if have == BOSSES_ALL:
+            log.append('patch: %s already has both bosses unlocked'
+                       % BOSSES_FILE)
+            return
+        temp = path + '.new'
+        try:
+            with open(temp, 'wb') as fh:
+                fh.write(BOSSES_ALL.to_bytes(4, 'little'))
+            os.replace(temp, path)
+        except OSError as exc:
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
+            log.append('patch: could not write %s - %s' % (BOSSES_FILE, exc))
+            return
+        log.append('patch: wrote %s (both bosses unlocked)' % path)
+
+    def _write_banner(self, log, applied):
         """The tile indices went into the executable; the tiles themselves
         live in escrgame.bin, so that has to be written too or the prompt
-        draws the old artwork through the new table.
+        draws the old artwork through the new table. The bosses' portraits
+        on the select are tiles in the same file.
 
         A missing or unexpected escrgame.bin is not fatal - every other patch
         has already been written - but it does have to be said out loud."""
@@ -9437,13 +22199,18 @@ class Patcher:
         if not self._backup(path, log):
             log.append('patch: %s left alone' % self.build.art[0])
             return
-        for i, raw in enumerate(BANNER_TILES):
-            off = (BANNER_TILE_OFF + i * 128 if i < BANNER_TILE_MAX
-                   else (BANNER_SPILL + i - BANNER_TILE_MAX) * 128)
-            data[off:off + 128] = raw
-        for i in range(len(BANNER_TILES), BANNER_TILE_MAX):
-            off = BANNER_TILE_OFF + i * 128
-            data[off:off + 128] = b'\x00' * 128
+        if 'padxinput' in applied:
+            for i, raw in enumerate(BANNER_TILES):
+                off = (BANNER_TILE_OFF + i * 128 if i < BANNER_TILE_MAX
+                       else (BANNER_SPILL + i - BANNER_TILE_MAX) * 128)
+                data[off:off + 128] = raw
+            for i in range(len(BANNER_TILES), BANNER_TILE_MAX):
+                off = BANNER_TILE_OFF + i * 128
+                data[off:off + 128] = b'\x00' * 128
+        if 'bosses' in applied:
+            for i, raw in enumerate(boss_icon_tiles()):
+                off = (BOSS_ICON_TILES[i // 48] + i % 48) * 128
+                data[off:off + 128] = raw
         temp = path + '.new'
         try:
             with open(temp, 'wb') as fh:
@@ -11679,7 +24446,10 @@ def run_tk():
             for key in keys:
                 label, tip, _sites = BY_KEY[key]
                 row = ttk.Frame(parent, style='Card.TFrame')
-                row.pack(fill='x', pady=self.px(3))
+                # A patch that needs another is a choice under it: set in
+                # from the card's edge, as a sub-item of a list is.
+                row.pack(fill='x', pady=self.px(3),
+                         padx=(self.px(18) if key in NEEDS else 0, 0))
                 var = tk.BooleanVar(value=state[key])
                 self.vars[key] = var
                 if key in ESSENTIAL:
@@ -11720,6 +24490,8 @@ def run_tk():
             link(REPO_URL)
             _hint(parent, 'Original logo by: SirRockEmSockEm',
                   self.dim, self.small, pady=(4, 0))
+            _hint(parent, BOSSES_CREDIT + BOSSES_AUTHOR, self.dim, self.small)
+            link(BOSSES_URL)
             tk.Frame(parent, height=1, background=PALETTE['line'],
                      borderwidth=0, highlightthickness=0).pack(fill='x', pady=(10, 8))
             self._patch_body(parent, ABOUT, None)
@@ -11924,6 +24696,7 @@ def run_tk():
                          or not hires_supported_stamp(self.core.stamp)):
                 self.vars['hires'].set(False)
                 self.checks['hires'].state(['disabled'])
+            self._sync_needs()
             self._chose = bool(ok)
             self.apply_btn.state(['!disabled'] if ok else ['disabled'])
             self.restore_btn.state(
@@ -11943,8 +24716,24 @@ def run_tk():
             return sum(1 for key, var in self.vars.items()
                        if key in ESSENTIAL or var.get())
 
+        def _sync_needs(self):
+            """A box that needs another follows it: unticked and greyed
+            while the one it needs is off, so what is ticked is what will
+            be written."""
+            for key, need in NEEDS.items():
+                if key not in self.checks or need not in self.checks:
+                    continue
+                on = (self.vars[need].get()
+                      and 'disabled' not in self.checks[need].state())
+                if on:
+                    self.checks[key].state(['!disabled'])
+                else:
+                    self.vars[key].set(False)
+                    self.checks[key].state(['disabled'])
+
         def _retally(self, *_args):
             """Keep the count honest as boxes are ticked."""
+            self._sync_needs()
             if self.core.exe_path and not self.core.compare:
                 self._set_status(READY % (self.core.build.name,
                                           self._selected()), True)

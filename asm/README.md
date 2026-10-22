@@ -42,6 +42,7 @@ and release workflow see [DEVELOPING.md](../docs/DEVELOPING.md).
 | `nameentry.asm` | ending screens: adds A to the initials screen, beside the triggers |
 | `camskip.asm` | gamepad: lets A skip the win and lose screens, as Select does |
 | `lockline.asm` | Fix the lock-on line: the clippers project 2D quads with the 2D scale |
+| `bosses.asm` | Playable bosses: the bosses in the select's row once unlocked, the unlocks and their screen, the boss's colour, and every place the game only handled the eight machines |
 | `ui.asm` | Native widescreen: the resolution blob, built by `tools/uibuild.py` (see below) |
 | `layout.py` | data blob layout and string table, shared by `vocd.asm` and the blob |
 | `padtables.py` | gamepad: what each pad input is, what it is called, the F7 device list |
@@ -187,19 +188,19 @@ resolution blob on the retail file only.
 
 ## Where the blobs go
 
-Every blob but two is in the annex: a section, `.vojp`, that the patcher
+Every blob but three is in the annex: a section, `.vojp`, that the patcher
 appends before any patch is written, executable, and fills through the
 site table like any other site. Where it lands is fixed by the file's own
 headers, so its addresses are known when the patcher loads and nothing
-is relinked at apply time; `.voxt` and `.vocd`, the sections two patches
-append at apply time, land after it. Every entry reads its length from the
+is relinked at apply time; `.vobs`, `.voxt` and `.vocd`, the sections
+three patches append at apply time, land after it. Every entry reads its length from the
 blob, so a routine can change size with a rebuild and nothing else.
 
-The two exceptions are places the game itself reaches: the F7 device
+Two of the exceptions are places the game itself reaches: the F7 device
 list, which `padtables.py` writes into the game's own run in `.data`, and
 `levers.asm`, written straight after `padxinput.asm` because the epilogue
 it replaces falls through into it. Those are the `caves` table of each
-`Build`.
+`Build`. The third is `bosses.asm`, in a section of its own (below).
 
 Nothing goes in a run of zeros in `.rdata`. A run there is never known to
 be free: a pointer just before it means the tail of a structure or the
@@ -208,9 +209,13 @@ reference the file shows, and both have crashed the game before. Two
 runs, at `0x5f80e0` and `0x623d98`, are `qword` constants that scan as
 zeros; `0x5fb140` is a scoreboard template the attract loop copies.
 
-Three patches append a section of their own rather than use the annex,
+Four patches append a section of their own rather than use the annex,
 because what they carry is too big for it and only exists once the patch
-is applied. The third, `.vohr`, is **Native widescreen**'s: its code is
+is applied. `.vobs` is **Playable bosses**' (`bosses.asm`, below): built
+and linked like the annex's blobs, since its place follows from the
+annex's, but written only when ticked and only as far as its last byte
+that is not zero - the buffers at its end are the section's virtual size.
+The fourth, `.vohr`, is **Native widescreen**'s: its code is
 `ui.asm` here, the same nasm as everything else, but built by
 `tools/uibuild.py` rather than `build.py` - it is position independent
 (no `org`) and carries its own address list, so the blob and its offset
@@ -788,6 +793,43 @@ sites each call `clipproj_a`/`b`, which divides by the aspect slot while
 the flag is up and the 3D slot otherwise. Two renderers, two flags, two
 pairs of projection slots. How it was found is in
 [HIRES.md](../docs/HIRES.md), *The lock-on line*.
+
+## bosses.asm
+
+Jaguarandi and Z-Gradt as the player's machine in a one-player game, once
+unlocked. The select's row gets two more places, and every place the game
+handled the eight alone gets a hook. The player's guide and the design
+are in [BOSSES.md](../docs/BOSSES.md).
+
+The file is in sections, each a hook or a few, in this order:
+
+- the per-frame tick from the loop's idle call, which follows the select
+  and keeps the flag `boss`, and confirm
+- the select: its row, its tables made ten long, the bosses' own select
+  models posed from their fight models, the palettes (a boss borrows two
+  rows the select leaves alone), and the portraits, marks and frame
+  shifted left
+- the palette loaders, PLAYER DATA's turntable, the unlocks with their
+  screen and `bosses.bin`, the round's animation loads, and the ending
+- Z-Gradt's chase camera; the player's Z-Gradt - its fly-in, its laser's
+  button, its floor - and Z-Gradt against Z-Gradt, where the player's
+  gets its own model header and AI state; Z-Gradt's gold
+- the KO replay's ring, Jaguarandi's red segments, Z-Gradt's laser gauge
+  and its weapons on the strips, and the replay and the win and lose
+  screens
+
+The data is at the end, the zeroed buffers last so the file carries none
+of them.
+
+Every hook is in player 1's copy of the fight machine, `A` in the names,
+as [HIRES.md](../docs/HIRES.md) letters the renderers. The other copy's
+tick is only called in the loop's two-player branch, and the bosses are
+one player only. A hook that replaces more than one instruction replays
+what it displaced. The hooks in code every machine runs, the polygon
+queue, load identity and the shadow draws, test `boss` first and fall
+through to the original otherwise. The replay's ring is the one
+exception: it keeps Z-Gradt's AI globals in every fight, whoever is in
+it.
 
 ## titlever.asm
 

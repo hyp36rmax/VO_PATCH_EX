@@ -8,7 +8,11 @@ import experience as guard
 
 class AuthorizationTests(unittest.TestCase):
     def setUp(self):
-        self.record = json.loads(guard.RECORD.read_text())
+        # A historical authorization supplies test structure, never live approval.
+        fixture = Path('.github/release-authorizations/v0.18.0.json')
+        self.record = json.loads(fixture.read_text())
+        self.record['version'] = guard.VERSION
+        self.record['windows_acceptance']['baseline_commit'] = guard.VALIDATED_BASELINE
         self.payload = b'test artifact'
         self.notes = b'test notes'
         self.record.update(artifact_sha256=guard.digest(self.payload), artifact_size=len(self.payload),

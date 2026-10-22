@@ -2,7 +2,7 @@ name: "Build"
 
 on:
   push:
-    branches: [main, Controller-Expansion, Experience]
+    branches: [main, Controller-Expansion, Experience, feature/playable-bosses-v0181]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -49,6 +49,7 @@ jobs:
       - name: Experience privacy and branding
         run: |
           python tools/brandingtest.py
+          python tools/experience/test_bosses.py
           python tools/experience/test_repository.py
           python tools/experience/test_diagnostics.py
           python tools/experience/test_normal_lifecycle.py
@@ -150,7 +151,7 @@ jobs:
 
   experience-native:
     needs: verify
-    if: github.ref_name == 'Experience'
+    if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -218,7 +219,7 @@ jobs:
       # short SHA, so a downloaded artifact says which commit built it.
       # The window title, --version and the zip names read this one line.
       - name: Stamp the version
-        if: github.ref_name != 'Experience'
+        if: github.ref_name != 'Experience' && github.ref_name != 'feature/playable-bosses-v0181'
         shell: bash
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
@@ -339,13 +340,13 @@ jobs:
           fi
 
       - uses: actions/download-artifact@v4
-        if: github.ref_name == 'Experience'
+        if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181'
         with:
           name: experience-native
           path: build/experience-native
 
       - name: Assemble Experience Windows package
-        if: github.ref_name == 'Experience'
+        if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181'
         shell: bash
         run: |
           python tools/experience/catalog_input.py unpack tools/experience/ci/catalog.json.xz build/catalog
@@ -373,7 +374,7 @@ jobs:
       # -src: GitHub adds its own "Source code" zip to every release, and
       # two of those confuse.
       - name: Zip
-        if: github.ref_type != 'tag' && github.ref_name != 'Experience'
+        if: github.ref_type != 'tag' && github.ref_name != 'Experience' && github.ref_name != 'feature/playable-bosses-v0181'
         shell: bash
         run: |
           python tools/package.py dist "$artifact"

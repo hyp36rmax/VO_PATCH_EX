@@ -19,7 +19,7 @@ for path in root.rglob('*'):
 assert (root/'v-on-patcher.exe').read_bytes()[:2]==b'MZ'
 assert (ex/'payload/vodisplay.dll').read_bytes()[:2]==b'MZ'
 index=json.loads((ex/'catalog/catalog.json').read_text())
-assert len(index['entries'])==512
+assert len(index['entries'])==2 * (1 << len(index['keys']))
 with zipfile.ZipFile(ex/'catalog/recipes.zip') as z:
  assert z.testzip() is None and set(z.namelist())==set(index['entries'])
  for name,entry in index['entries'].items():
@@ -29,9 +29,9 @@ with zipfile.ZipFile(ex/'catalog/recipes.zip') as z:
   assert sum(len(bytes.fromhex(x[1])) for x in recipe['writes'])<recipe['size']
 for name in ['normal_lifecycle.py','diagnostics.py','discovery.py','movie_geometry.py','pythonw.exe','python312.dll','python312.zip']:
  assert (ex/'payload/experience-runtime'/name).is_file()
-print('PASS manifest hashes, 512 sparse option recipes, upstream Windows launcher, runtime completeness, game-asset exclusion')
+print('PASS manifest hashes, complete sparse option recipes, upstream Windows launcher, runtime completeness, game-asset exclusion')
 
-for name in ['Pairomaniac-MIT.txt','cnc-ddraw-MIT.txt','Python.txt','certifi-LICENSE.txt','MinGW-runtime.txt']:
+for name in ['Playable-Bosses.txt','Pairomaniac-MIT.txt','cnc-ddraw-MIT.txt','Python.txt','certifi-LICENSE.txt','MinGW-runtime.txt']:
  assert (root/'Licenses'/name).is_file(), name
 assert (internal/'input/vontanita.dll').is_file()
 assert '_experience_bind(Patcher' in (internal/'v-on-patcher.py').read_text()

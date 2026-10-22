@@ -48,16 +48,19 @@ are committed as `net/dpctrl.dll` and `input/vontanita.dll`.
 regenerates `UI_REFS` in `tools/uibuild.py` and drives the build-mapping
 tools (`vomap`, `votrans`, `hiresport`); `python3-unicorn` runs the
 resolution blob in the `uiemu` check; the `ui` check compares a
-fingerprint only where nasm is absent.
+fingerprint only where nasm is absent. Pillow bakes the bosses' portraits
+(`tools/portraits.py`) and is what the `portraits` check compares with;
+without it that check passes with a note.
 
 xvfb is the display the `gui` check needs; without it that check skips
 itself and says so.
 
 Versions, as measured rather than promised: nasm 2.14.02, 2.15.05,
 2.16.01 through 2.16.03 and 3.02 all assemble `asm/ui.asm` to the
-committed bytes - the one construct where 3.x changed its output, the
-prefix order on `rep stosw`, is pinned in the source - and the full
-`asm` check is green under 2.16.01 and 3.02. Older nasm is untested.
+committed bytes - the constructs where 3.x changed its output, the
+prefix order on `rep stosw` and `rep movsw` and `movsx eax, ax` shortened
+to `cwde`, are pinned in `asm/ui.asm` and `asm/bosses.asm` - and the
+full `asm` check is green under 2.16.01 and 3.02. Older nasm is untested.
 capstone 4.0.2 and 5.0.7 regenerate identical `UI_REFS`. pyflakes and
 python carry no floor anyone has hit.
 
@@ -80,6 +83,8 @@ python3 input/build.py            # only if you touched input/ - rebuilds the he
 python3 tools/uibuild.py          # only if you touched asm/ui.asm - the resolution blob;
                                   # then the other builds' tables and the pinned
                                   # MD5s: HIRES.md, Rebuilding
+python3 tools/portraits.py        # only if you touched assets/portrait_*.png - the
+                                  # bosses' select portraits (needs Pillow)
 
 python3 tools/check.py            # the checks CI runs, in two seconds
 python3 v-on-patcher.py               # does the window still open?
@@ -126,6 +131,7 @@ record any unavailable OEM/Japanese-original game checks as untested.
 | `raphnet` | device identities, exhaustive DC/Saturn button decoding, axis thresholds, Start claims, Pause and emitted retail/JPRE integration |
 | `custom` | twelve-slot remapping, independent player layouts, INI persistence and editor behavior |
 | `package` | generated ZIP helper paths, exact DLL bytes, real packaged-script discovery, and missing/misplaced/stale helper rejection; does not execute Windows |
+| `portraits` | `portraits.py --check`: the bosses' select portraits in `v-on-patcher.py` are what `assets/portrait_*.png` bake to. Without Pillow it says so and passes, having tested nothing; CI has Pillow |
 | `disc` | `disctest.py`: the disc reader, on ISO9660 images the test builds itself - one per sector layout, plus a cue that names the wrong one. Extraction is byte-exact, the `ssp.ini` rules give the retail and OEM file lists, and every refusal names what is wrong. Needs no game and no disc, so CI runs it |
 | `gui` | `guitest.py`: the window, opened under xvfb and driven without its loop - which button is offered for which source, that a copy holds both down until it finishes, and that the two columns end level whatever is open. None of these raise on their own, so each asserts the property. Needs a display; with none it skips and prints a note rather than passing quietly |
 | `lint` | pyflakes |
@@ -133,6 +139,7 @@ record any unavailable OEM/Japanese-original game checks as untested.
 | `tree` | nothing regenerated was left uncommitted. Skipped outside CI, where it would fail on every edit in progress |
 | `offsets` | `selftest.py`: every `original` column against a real file, hundreds of patch combinations applied, and the fully patched MD5, on whichever build the file is |
 | `banner` | `bannertest.py`: the title prompt decodes back to the bitmap it was written from, and both files restore byte for byte, on whichever build the folder holds |
+| `portrait` | `portraittest.py`: the bosses' select portraits read back out of `escrgame.bin` from the slots the blob's row builder names, both files restore byte for byte, the patch alone writes no `bosses.bin`, and unticked it appends no section, on whichever build the folder holds |
 | `credit` | `credittest.py`: the credit line recomposes out of the patched roll files, and both restore byte for byte. The line is spread over three files that have to agree - the block list in the executable, the cells in `scrstfmp.bin`, the tiles in `scrstfcg.bin` - so it patches a copy, walks the block list the way `0x448d39` does, expands the cells back through the tile sheet and compares the pixels against the bitmap the patcher started from |
 | `uiemu` | `uiemu.py`: the resolution blob run under Unicorn on the retail exe, patched in memory at 1080p. Checks the plane B walker with a photo block in the ring, the HUD spread's 2D and polygon positions, the pre-fill, and the layouts' insets and scales. Needs nasm and python3-unicorn, and says so when it has neither |
 
@@ -192,11 +199,14 @@ python3 tools/assets.py
 
 ## Where the blobs live
 
-Every blob but two is in the annex: a section, `.vojp`, appended before
+Every blob but three is in the annex: a section, `.vojp`, appended before
 any patch is written, executable, and filled through the site table like
 any other site. Where it lands is fixed by the file's own headers, so its
 addresses are known at import and nothing is relinked at apply time. The
-two exceptions are places the game itself reaches - the F7 device list's
+bosses blob is too big for it and gets a section of its own, `.vobs`,
+appended after the annex only when its box is ticked (`OWN_SECTIONS`);
+its place follows from the annex's, so it links at import as well. The
+other two exceptions are places the game itself reaches - the F7 device list's
 own run in `.data`, and the levers routine written straight after the
 XInput routine - and those are the `caves` table of each `Build`.
 
@@ -393,7 +403,11 @@ feed each other. The README's *Virus warnings* section tells users how to
 allow it in Defender meanwhile.
 
 `--generate-notes` writes the release body from commit subjects, which for a
-squashed history is close to useless. Replace it once CI is green:
+squashed history is close to useless. Replace it once CI is green: the
+logo, then sections named for what their bullets are (*Added* first,
+*Changed* and *Fixed* when there is something for them), in plain words,
+saying only what has been seen. Requirements and known issues stay in the
+README.
 
 ```bash
 gh release edit v0.8.4 --notes-file notes.md
@@ -414,6 +428,9 @@ well-formed and wrong on one build only:
 - a match to the win screen, and the replay after it
 - the F5, F7 and F11 dialogs, and a deadzone edit that survives a restart
 - the ending credits and the initials screen after them
+- with **Playable bosses** on, a game as each boss: the select, a match
+  to the win screen and its replay, a continue, and the unlock screens
+  with `bosses.bin` deleted first
 - the pad's soft reset, from a match and from a two-player match, since it
   runs the game's own teardown from wherever you are
 - one matchcode match against a second machine, direct and forced through

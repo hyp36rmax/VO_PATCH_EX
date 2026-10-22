@@ -3,8 +3,19 @@ import ast,hashlib,json,struct,sys,zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'dual_display'))
 import startup_image as s
+from functools import cache
+s.mode_profiles.engineering3840.load_private=cache(s.mode_profiles.engineering3840.load_private)
 catalog=Path(sys.argv[1]);v=s.mode_profiles.engineering3840.load_private()
+v.by_key=cache(v.by_key)
 index=json.loads((catalog/'catalog.json').read_text())
+# Boss-free option masks retain the accepted I01 sparse recipes exactly.
+import lzma,subprocess
+baseline=json.loads(lzma.decompress(subprocess.check_output(
+ ['git','show','4a6ef2e3e3bc4354a4b75e00b86e677bf61fa83b:tools/experience/ci/catalog.json.xz'],
+ cwd=Path(__file__).resolve().parents[2])))
+for name,entry in baseline['index']['entries'].items():
+ assert index['entries'][name]==entry, ('boss-free recipe changed',name)
+print('PASS 512 boss-free recipe identities preserved',flush=True)
 rows=[ast.literal_eval(line.rstrip(',').replace('{','[').replace('}',']')) for line in (catalog/'game_profiles.h').read_text().splitlines() if line.startswith('{0x')]
 assert len({tuple(row[:3]) for row in rows})==len(rows),'ambiguous first-match identity'
 def accepted(image,base,stamp,size):
@@ -15,8 +26,9 @@ count=0
 with zipfile.ZipFile(catalog/'recipes.zip') as archive:
  for folder in map(Path,sys.argv[2:]):
   raw=(folder/'v_on.exe').read_bytes();edition=v.BUILDS[hashlib.md5(raw).hexdigest()]
-  for mask in range(256):
+  for mask in range(1 << len(index['keys'])):
    wanted=dict.fromkeys(v.ESSENTIAL,True);wanted.update({key:bool(mask&(1<<i)) for i,key in enumerate(index['keys'])})
+   wanted['bossunlock']=False
    original,_,skipped=v.apply_selected(bytearray(raw),wanted,edition);assert not skipped
    if wanted.get('credits'):v.stamp_version(original,edition)
    recipe=json.loads(archive.read(f'{edition.short}/{mask}.json'))

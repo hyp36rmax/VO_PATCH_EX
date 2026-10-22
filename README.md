@@ -14,7 +14,7 @@ controllers in F7 and displays in F5. The original patch options and Restore
 original workflow remain available.
 
 For the current integrated prerelease, see [GitHub Releases](https://github.com/hyp36rmax/VO_PATCH_EX/releases).
-The [v0.18.0 release notes](docs/releases/v0.18.0.md) describe installation and compatibility.
+The [v0.18.1 release notes](docs/releases/v0.18.1.md) describe installation and compatibility.
 
 VO PATCH EX is an independent community project, not affiliated with or endorsed
 by SEGA. Original patcher logo and icon: **SirRockEmSockEm**. The header combines
@@ -42,6 +42,19 @@ The upstream patcher remains the foundation. Its [game fixes](docs/PATCHER.md#wh
 [windowing/scaling add-on](docs/PATCHER.md#windowing-and-scaling-cnc-ddraw)
 remain available alongside the original controller profiles.
 
+
+## Playable Bosses
+
+Optional single-player Jaguarandi and Z-Gradt support comes from **Vortyne's**
+implementation in **Pairomaniac's V-On Patcher**. **Playable bosses** is off by
+default; **Pre-unlock the bosses** requires it. Earned unlocks are stored in
+`bosses.bin` and survive Restore Original. Z-Gradt's special laser uses the
+existing Dash/turbo input. Local VS and online selection retain the original
+eight machines.
+
+Playable Bosses are supported in Single Player only. See the
+[upstream boss reference](docs/BOSSES.md) and
+[Experience integration and validation](docs/project/PLAYABLE-BOSSES.md).
 
 ## Display Expansion
 
