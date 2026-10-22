@@ -2,6 +2,7 @@
 import argparse,hashlib,json,os,shutil,subprocess
 from release_version import VERSION as RELEASE_VERSION, validate_release_tag
 from pathlib import Path
+from optimize_package import compress_recipes
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
@@ -9,12 +10,15 @@ def main():
  validate_release_tag(os.environ.get('GITHUB_REF_NAME', '') if os.environ.get('GITHUB_REF_TYPE') == 'tag' else '')
  out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
  shutil.copy2(a.baseline/'v-on-patcher.exe',out/'v-on-patcher.exe')
- shutil.copytree(a.baseline/'_internal',out/'_internal',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+ shutil.copytree(a.baseline/'_internal',out/'_internal',ignore=shutil.ignore_patterns('__pycache__','*.pyc','_ctypes_test.pyd'))
  internal=out/'_internal'
  # Tcl's nmake directory is build tooling, not the shipped Tk runtime.
  shutil.rmtree(internal/'tcl/nmake',ignore_errors=True)
  experience=internal/'experience';experience.mkdir()
- shutil.copytree(a.catalog,experience/'catalog',ignore=shutil.ignore_patterns('*.log'))
+ # The profile header is compiled into the wrapper, never read at runtime.
+ (experience/'catalog').mkdir()
+ for name in ('catalog.json','recipes.zip'):shutil.copy2(a.catalog/name,experience/'catalog'/name)
+ compress_recipes(experience/'catalog')
  # The original UI/source is used verbatim except for binding Apply/Restore's
  # private distribution adapter before main. No second installer or game launcher.
  source=(ROOT/'v-on-patcher.py').read_text();needle="if __name__ == '__main__':"

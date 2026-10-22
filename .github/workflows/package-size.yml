@@ -1,0 +1,80 @@
+name: Distribution size validation
+on:
+  push:
+    branches: [maintenance/r0181-package-size]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y nasm xvfb
+      - run: pip install pyflakes unicorn pillow capstone
+      - run: xvfb-run -a python tools/check.py
+      - run: python tools/experience/test_package_compression.py
+      - run: python tools/experience/test_bosses.py
+  windows:
+    needs: verify
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+      - name: Recover the immutable release inputs
+        shell: python
+        run: |
+          import hashlib, pathlib, shutil, urllib.request, zipfile
+          p = pathlib.Path('original.zip')
+          urllib.request.urlretrieve('https://github.com/hyp36rmax/VO_PATCH_EX/releases/download/v0.18.1/VO-PATCH-EX-v0.18.1-Windows.zip', p)
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == '7556d4d67d0c0ff2ec03fbfb419852fda45037229bbaf5da1d50a5180de7f329'
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+              z.extractall('original')
+          shutil.copytree('original', 'baseline')
+          shutil.move('baseline/_internal/experience', 'inputs')
+          pathlib.Path('wrapper').mkdir()
+          for source, target in [('inputs/payload/ddraw.dll', 'ddraw.dll'), ('original/Licenses/cnc-ddraw-MIT.txt', 'LICENSE'), ('original/Licenses/MinGW-runtime.txt', 'MinGW-runtime.txt')]:
+              shutil.copy2(source, pathlib.Path('wrapper') / target)
+      - name: Assemble through the normal packager
+        shell: bash
+        run: |
+          python tools/experience/test_package_compression.py
+          python tools/experience/package_normal.py candidate baseline inputs/catalog wrapper inputs/payload/vodisplay.dll
+          python tools/experience/test_normal_package.py candidate
+          python tools/experience/test_release_version.py candidate
+          python tools/experience/test_package_optimization.py original candidate
+      - name: Exercise shipped Python, launcher and independent installed runtime
+        shell: python
+        run: |
+          import pathlib, shutil, subprocess
+          root = pathlib.Path('candidate').resolve()
+          subprocess.run([str(root/'_internal/python.exe'), '-B', 'tools/experience/test_normal_package.py', str(root)], check=True)
+          subprocess.run([str(root/'_internal/python.exe'), '-B', str(root/'_internal/v-on-patcher.py'), '--version'], check=True)
+          smoke = pathlib.Path('launcher smoke').resolve()
+          shutil.copytree(root, smoke)
+          subprocess.run([str(smoke/'v-on-patcher.exe'), '--selfcheck'], check=True, timeout=60)
+          runtime = pathlib.Path('independent game é/experience-runtime').resolve()
+          shutil.copytree(root/'_internal/experience/payload/experience-runtime', runtime)
+          root.rename('patcher unavailable')
+          result = runtime.parent/'runtime-result.txt'
+          code = "import pathlib,sys,ctypes,lzma,ssl; import normal_lifecycle as n; p=pathlib.Path(sys.argv[1]); assert n.run(p.parent,lambda:None,lambda:None) is None; p.write_text('PASS independent bundled runtime, default-Off lifecycle and native extensions')"
+          subprocess.run([str(runtime/'pythonw.exe'), '-B', '-c', code, str(result)], cwd=runtime.parent, check=True, timeout=60)
+          assert result.read_text().startswith('PASS independent')
+          pathlib.Path('patcher unavailable').rename(root)
+          shutil.make_archive('VO-PATCH-EX-v0.18.1-Optimized-Private-Windows-UAT', 'zip', root)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optimized-private-windows-uat
+          path: VO-PATCH-EX-v0.18.1-Optimized-Private-Windows-UAT.zip
+          retention-days: 7
