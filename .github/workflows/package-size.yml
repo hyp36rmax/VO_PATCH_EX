@@ -1,7 +1,7 @@
-name: Compact distribution validation
+name: Title branding validation
 on:
   push:
-    branches: [maintenance/r0181-compact-catalog]
+    branches: [maintenance/r0181-title-branding]
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,6 +21,7 @@ jobs:
       - run: python tools/experience/test_package_compression.py
       - run: python tools/experience/test_compact_catalog.py
       - run: python tools/experience/test_bosses.py
+      - run: python tools/attributiontest.py
   windows:
     needs: verify
     runs-on: windows-latest
@@ -52,7 +53,8 @@ jobs:
         shell: bash
         run: |
           python tools/experience/test_package_compression.py
-          python tools/experience/package_normal.py candidate baseline inputs/catalog wrapper inputs/payload/vodisplay.dll
+          python tools/experience/catalog_input.py unpack tools/experience/ci/catalog.json.xz title-catalog
+          python tools/experience/package_normal.py candidate baseline title-catalog wrapper inputs/payload/vodisplay.dll
           python tools/experience/test_normal_package.py candidate
           python tools/experience/test_release_version.py candidate
           python tools/experience/test_compact_package.py original candidate
@@ -76,9 +78,9 @@ jobs:
           subprocess.run([str(runtime/'pythonw.exe'), '-B', '-c', code, str(result)], cwd=runtime.parent, check=True, timeout=60)
           assert result.read_text().startswith('PASS independent')
           pathlib.Path('patcher unavailable').rename(root)
-          shutil.make_archive('VO-PATCH-EX-v0.18.1-Compact-Private-Windows-UAT', 'zip', root)
+          shutil.make_archive('VO-PATCH-EX-v0.18.1-Title-Private-Windows-UAT', 'zip', root)
       - uses: actions/upload-artifact@v4
         with:
-          name: compact-private-windows-uat
-          path: VO-PATCH-EX-v0.18.1-Compact-Private-Windows-UAT.zip
+          name: title-private-windows-uat
+          path: VO-PATCH-EX-v0.18.1-Title-Private-Windows-UAT.zip
           retention-days: 7

@@ -13,6 +13,7 @@ def digest(data):
 
 def sources():
     paths = [ROOT / 'v-on-patcher.py', ROOT / 'tools/experience/build_catalog.py',
+             ROOT / 'asm/build.py', ROOT / 'tools/experience/release_version.py',
              ROOT / 'tools/experience/catalog_input.py', * (ROOT / 'asm').glob('*.asm'),
              * (ROOT / 'tools/dual_display').glob('*.py'),
              * (ROOT / 'tools/dual_display').glob('*.h'),

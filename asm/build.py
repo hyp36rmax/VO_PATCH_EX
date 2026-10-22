@@ -320,7 +320,13 @@ def main(check=False):
     with open(TARGET, encoding='utf-8') as fh:
         src = fh.read()
     new = replace(src, 'VOCD', ''.join(vocd_out))
-    new = replace(new, 'BLOBS', emit_blobs(blobs))
+    # Copy the release authority at build time; the game needs no Python.
+    import runpy
+    release = runpy.run_path(os.path.join(HERE, '..', 'tools', 'experience', 'release_version.py'))['VERSION'].removeprefix('v')
+    title = 'VO PATCH EX ' + release
+    if len(title.encode('ascii')) >= 24:
+        raise ValueError('Release title exceeds the native text field')
+    new = replace(new, 'BLOBS', 'TITLE_RELEASE = %r\n\n' % release + emit_blobs(blobs))
     new = replace(new, 'DIALOGS',
                   hexblob('EXTRAS_TPL', extras_tpl) + '\n'
                   + hexblob('F5_STOCK', dialogs.build_f5(dialogs.F5_STOCK))

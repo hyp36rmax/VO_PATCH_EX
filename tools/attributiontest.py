@@ -6,7 +6,7 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 import selftest
 v=selftest.load_patcher()
-baseline=subprocess.check_output(['git','show','0737ebf:v-on-patcher.py'],cwd=ROOT,text=True)
+baseline=subprocess.check_output(['git','show','3de764720c89da3e355ea05013c1f6f57fcc8d40:v-on-patcher.py'],cwd=ROOT,text=True)
 old=types.ModuleType('attribution_baseline');old.__file__=str(ROOT/'v-on-patcher.py');sys.modules[old.__name__]=old
 exec(compile(baseline,old.__file__,'exec'),old.__dict__)
 assert v.CREDITS==old.CREDITS and v.CREDIT_NEW_TILES==old.CREDIT_NEW_TILES and v.CREDIT_CELLS==old.CREDIT_CELLS
@@ -32,9 +32,9 @@ for edition in (v.RETAIL,v.JPRE):
     text=bytes(machine.mem_read(ptr,64)).split(b'\0')[0].decode();calls.append(('text',text))
   mu.hook_add(UC_HOOK_CODE,hook);mu.emu_start(origin,stop,count=1000)
   assert mu.reg_read(UC_X86_REG_EAX)==0x12345678 and mu.reg_read(UC_X86_REG_ESP)==sp+4
-  expected=[('cursor',(43,48)),('text','VO PATCH EX 0.1-dev'),('cursor',(79-2*len(v.version_text()),50)),('text',v.version_text())]
+  expected=[('cursor',(79-2*len(v.version_text()),48)),('text','VO PATCH EX 0.18.1')]
   assert calls==(expected if visible else []),(edition.short,calls)
- print('PASS',edition.short,'title states, bounded separate rows, upstream version, displaced load and stack')
+ print('PASS',edition.short,'title states, single release line, no development draw, displaced load and stack')
 print('PASS exact upstream credits/resources/constants and all non-title blobs preserved')
 # Resource failure behavior and Restore Original, exercised only on copies.
 import tempfile
@@ -48,7 +48,7 @@ for folder in map(pathlib.Path, sys.argv[1:]):
    patch=v.Patcher();assert patch.load(str(t/'v_on.exe'))[1]
    ok,log=patch.apply({'credits':True});assert not ok,log
    assert any('skipped' in line for line in log)
-   assert b'VO PATCH EX 0.1-dev' not in (t/'v_on.exe').read_bytes()
+   assert b'VO PATCH EX 0.18.1' not in (t/'v_on.exe').read_bytes()
    assert (t/other).read_bytes()==original and not (t/(other+'.bak')).exists()
    patch.restore();assert (t/'v_on.exe').read_bytes()==raw
  print('PASS',folder.name,'each missing credit resource skips attribution; exact executable restore')

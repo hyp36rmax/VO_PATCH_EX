@@ -11,8 +11,8 @@ def validate_release_tag(tag):
 
 
 def configure(scope):
-    # VERSION also feeds upstream binary patch stamps. Keep it unchanged so
-    # presentation-only updates cannot invalidate the frozen patch recipes.
+    # Preserve upstream provenance. asm/build.py separately copies VERSION
+    # into the native title authority and checks the reserved field length.
     scope['EX_VERSION'] = VERSION
     scope['TITLE'] = 'V-On Patcher EX ' + VERSION
     scope['EX_ATTRIBUTION'] = re.sub(r'^VO PATCH EX \S+', 'VO PATCH EX ' + VERSION,

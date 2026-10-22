@@ -17,7 +17,7 @@ removed = {'_internal/DLLs/_ctypes_test.pyd',
 added = {'_internal/compact_catalog.py', '_internal/experience/catalog/'+NAME}
 assert set(a)-set(b)==removed
 assert set(b)-set(a)==added
-allowed={'PACKAGE-SHA256.json','_internal/experience/payload-manifest.json','_internal/normal_install.py'}
+allowed={'PACKAGE-SHA256.json','_internal/experience/payload-manifest.json','_internal/normal_install.py', '_internal/v-on-patcher.py', '_internal/experience/catalog/catalog.json'}
 changed={n for n in set(a)&set(b) if a[n].read_bytes()!=b[n].read_bytes()}
 assert changed<=allowed, changed-allowed
 old=json.loads(a['_internal/experience/payload-manifest.json'].read_text())
@@ -30,6 +30,9 @@ with zipfile.ZipFile(original/'_internal/experience/catalog/recipes.zip') as sou
     assert set(source.namelist())==set(catalog.index['entries'])
     for name in source.namelist():
         raw=catalog.read(name)
-        assert raw==source.read(name),name
+        old_recipe=json.loads(source.read(name));new_recipe=json.loads(raw)
+        if new_recipe['mask'] & (1<<catalog.index['keys'].index('credits')):
+            for key in ('base','final'):old_recipe[key]=new_recipe[key]
+        assert new_recipe==old_recipe,name
         assert hashlib.sha256(raw).hexdigest()==catalog.index['entries'][name]['sha256']
-print('PASS 2048 exact recipes; only compact loader/storage and S01 exclusions differ; native/runtime bytes unchanged')
+print('PASS 2048 recipes preserve all delta writes and option identities; title-enabled image hashes updated; native/runtime bytes unchanged')

@@ -10,14 +10,16 @@ s.mode_profiles.engineering3840.load_private=cache(s.mode_profiles.engineering38
 catalog=Path(sys.argv[1]);v=s.mode_profiles.engineering3840.load_private()
 v.by_key=cache(v.by_key)
 index=json.loads((catalog/'catalog.json').read_text())
-# Boss-free option masks retain the accepted I01 sparse recipes exactly.
+# Credits-disabled boss-free masks retain the I01 recipes exactly.
+# test_title_catalog.py checks intentional title-only changes for every mask.
 import lzma,subprocess
 baseline=json.loads(lzma.decompress(subprocess.check_output(
  ['git','show','4a6ef2e3e3bc4354a4b75e00b86e677bf61fa83b:tools/experience/ci/catalog.json.xz'],
  cwd=Path(__file__).resolve().parents[2])))
 for name,entry in baseline['index']['entries'].items():
- assert index['entries'][name]==entry, ('boss-free recipe changed',name)
-print('PASS 512 boss-free recipe identities preserved',flush=True)
+ if not (int(Path(name).stem) & (1 << index['keys'].index('credits'))):
+  assert index['entries'][name]==entry, ('credits-disabled recipe changed',name)
+print('PASS 256 credits-disabled boss-free recipe identities preserved; title-enabled masks checked separately',flush=True)
 rows=[ast.literal_eval(line.rstrip(',').replace('{','[').replace('}',']')) for line in (catalog/'game_profiles.h').read_text().splitlines() if line.startswith('{0x')]
 assert len({tuple(row[:3]) for row in rows})==len(rows),'ambiguous first-match identity'
 def accepted(image,base,stamp,size):

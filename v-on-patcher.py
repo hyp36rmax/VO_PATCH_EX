@@ -6109,6 +6109,8 @@ JP.sites = {
 # into the code, named by the symbol tables and the site table.
 
 # BLOBS BLOB BEGIN
+TITLE_RELEASE = '0.18.1'
+
 BLOBS = {
     'RAPH': (bytes.fromhex(
         '83f8077313ff24850000000083f8077319ff2485000000006800000000e8fcff'
@@ -7123,25 +7125,21 @@ BLOBS = {
         'prompt': 0x86,
     }),
     'TITLEVER': (bytes.fromhex(
-        'a10000000083f801755ea10000000083f806740a83f817740583f811754a6a30'
-        '6a2be8fcffffff83c408686e000000e8fcffffff83c404ba8300000031c9803c'
-        '0a00740341ebf7b84f00000029c829c86a3250e8fcffffff83c4086883000000'
-        'e8fcffffff83c404a100000000c3564f20504154434820455820302e312d6465'
-        '760001000000000000000000000000000000000000000000000000'
+        'a10000000083f8017545a10000000083f806740a83f817740583f8117531ba83'
+        '00000031c9803c0a00740341ebf7b84f00000029c829c86a3050e8fcffffff83'
+        'c4086883000000e8fcffffff83c404a100000000c39090909090909090909090'
+        '9090909090909090909090909090909090909090909090909090909090909090'
+        '909001000000000000000000000000000000000000000000000000'
     ), (
         (0x1, 'abs', 'MODE', 0),
         (0xb, 'abs', 'SUBMODE', 0),
-        (0x23, 'rel', 'CURSOR', -4),
-        (0x2b, 'abs', '.', 110),
-        (0x30, 'rel', 'PRINT', -4),
-        (0x38, 'abs', '.', 131),
-        (0x54, 'rel', 'CURSOR', -4),
-        (0x5c, 'abs', '.', 131),
-        (0x61, 'rel', 'PRINT', -4),
-        (0x69, 'abs', 'PRIMARY', 0),
+        (0x1f, 'abs', '.', 131),
+        (0x3b, 'rel', 'CURSOR', -4),
+        (0x43, 'abs', '.', 131),
+        (0x48, 'rel', 'PRINT', -4),
+        (0x50, 'abs', 'PRIMARY', 0),
     ), {
         'titlever': 0x0,
-        'extext': 0x6e,
         'text': 0x83,
     }),
     'ACTIVATE': (bytes.fromhex(
@@ -18257,11 +18255,11 @@ _check_titlever()
 
 
 def version_text():
-    """What the title screen shows, truncated to the field it goes in.
-
-    No v in front of the number: a tag build reads 0.8.7 but a commit build
-    reads a short SHA, and "V-On Patcher v1a2b3c4" is nonsense."""
-    return ('%s %s' % (LABEL, VERSION))[:TITLEVER_LEN - 1]
+    """Release identity copied from the central authority by asm/build.py."""
+    text = 'VO PATCH EX ' + TITLE_RELEASE
+    if len(text.encode('ascii')) >= TITLEVER_LEN:
+        raise ValueError('Release title exceeds the native text field')
+    return text
 
 
 def stamp_version(buf, build=RETAIL):

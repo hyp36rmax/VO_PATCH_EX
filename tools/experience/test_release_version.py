@@ -1,4 +1,4 @@
-"""Check product presentation without changing patch provenance or recipes."""
+"""Check product and generated title versions while preserving upstream provenance."""
 import ast
 import json
 import runpy
@@ -32,8 +32,8 @@ class ProductVersion(unittest.TestCase):
         tree = ast.parse((root/'v-on-patcher.py').read_text())
         values = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
                   if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
-                  and n.targets[0].id in ('VERSION', 'EX_VERSION')}
-        self.assertEqual(values, {'VERSION': 'dev', 'EX_VERSION': '0.1-dev'})
+                  and n.targets[0].id in ('VERSION', 'EX_VERSION', 'TITLE_RELEASE')}
+        self.assertEqual(values, {'VERSION': 'dev', 'EX_VERSION': '0.1-dev', 'TITLE_RELEASE': VERSION.removeprefix('v')})
 
 
 if __name__ == '__main__':
@@ -45,6 +45,7 @@ if __name__ == '__main__':
         assert scope['EX_VERSION'] == VERSION
         assert scope['TITLE'] == 'V-On Patcher EX ' + VERSION
         assert scope['VERSION'] == 'dev'
+        assert scope['version_text']() == 'VO PATCH EX ' + VERSION.removeprefix('v')
         assert scope['EX_ATTRIBUTION'].startswith('VO PATCH EX ' + VERSION)
         assert VERSION in (package/'READ-ME.txt').read_text()
         metadata = json.loads((internal/'experience/payload-manifest.json').read_text())

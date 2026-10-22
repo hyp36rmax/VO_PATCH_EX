@@ -53,7 +53,7 @@ MENU        equ 0x11            ; 0x44b5bc, 1 PLAYER and the two below it
 ; Cells, of the 81-wide map, two per character. The copyright line is 59 of
 ; them from column 1 at row 44, which is what these were measured against.
 RIGHT       equ 79              ; one past the last cell the line may use
-ROW         equ 50
+ROW         equ 48
 
 TEXTLEN     equ 24              ; what the patcher has to write the version in
 
@@ -69,14 +69,6 @@ titlever:
     cmp     eax, MENU
     jne     .out
 .draw:
-    ; Add the local integration identity above, leaving upstream's line intact.
-    push    48
-    push    43                 ; 18 characters, two cells each, ends at 79
-    call    CURSOR
-    add     esp, 8
-    push    extext
-    call    PRINT
-    add     esp, 4
     mov     edx, text           ; right-aligned on RIGHT, two cells a
     xor     ecx, ecx            ; character
 .len:
@@ -101,8 +93,9 @@ titlever:
     mov     eax, [PRIMARY]      ; the displaced load
     ret
 
-extext:
-    db 'VO PATCH EX 0.1-dev',0
-    db 1                       ; boundary marker before upstream version field
+; Preserve the existing blob footprint and text address: other annex
+; payloads must not move for a title-only correction.
+    times 130-($-$$) db 0x90
+    db 1
 text:
-    times   TEXTLEN db 0
+    times TEXTLEN db 0

@@ -47,3 +47,16 @@ Source, upstream-result and final-image hashes, installation ownership, rollback
 and Restore remain authoritative. The installed runtime and native binaries are
 unchanged. The compact catalog is an installation resource, not a game runtime
 or a new patch engine. Windows acceptance is required before release.
+
+## In-game release title
+
+`asm/build.py` copies `release_version.VERSION` without its leading `v` into
+`TITLE_RELEASE` in the generated patcher data. The title hook draws one
+right-aligned line through the original green tile font at row 48. Its 155-byte
+footprint and text offset remain fixed; no SEGA artwork or adjacent native blob
+moves. The separate development-label draw is removed.
+
+The existing credits/title option and missing-credit-resource behavior remain
+unchanged. Title-enabled recipes intentionally receive new base/final hashes;
+`test_title_catalog.py` requires every other executable byte and every Display
+delta write to match S03. Credits-disabled outputs remain byte-identical.
