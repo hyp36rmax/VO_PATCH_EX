@@ -1,5 +1,4 @@
 """Compare compact distribution against the immutable public release inputs."""
-import ast
 import hashlib
 import json
 from pathlib import Path
@@ -20,15 +19,16 @@ assert set(a)-set(b)==removed
 assert set(b)-set(a)==added
 allowed={'PACKAGE-SHA256.json','_internal/experience/payload-manifest.json','_internal/normal_install.py', '_internal/v-on-patcher.py', '_internal/experience/catalog/catalog.json'}
 changed={n for n in set(a)&set(b) if a[n].read_bytes()!=b[n].read_bytes()}
-# The version-authority comment documents title generation; code must match.
-version='_internal/release_version.py'
-assert ast.dump(ast.parse(a[version].read_text()))==ast.dump(ast.parse(b[version].read_text()))
-allowed.add(version)
+allowed.add('_internal/release_version.py')
+assert b['_internal/release_version.py'].read_text()==(Path(__file__).parent/'release_version.py').read_text()
 assert changed<=allowed, changed-allowed
 old=json.loads(a['_internal/experience/payload-manifest.json'].read_text())
 new=json.loads(b['_internal/experience/payload-manifest.json'].read_text())
 old['files'].pop('experience-runtime/DLLs/_ctypes_test.pyd')
-old['version']['revision']=new['version']['revision']
+from release_version import build_identity
+identity=build_identity(new['version']['revision'])
+assert all(new['version'][k]==value for k,value in identity.items())
+old['version'].update(identity)
 assert old==new
 catalog=Catalog(candidate/'_internal/experience/catalog')
 with zipfile.ZipFile(original/'_internal/experience/catalog/recipes.zip') as source:

@@ -60,3 +60,26 @@ The existing credits/title option and missing-credit-resource behavior remain
 unchanged. Title-enabled recipes intentionally receive new base/final hashes;
 `test_title_catalog.py` requires every other executable byte and every Display
 delta write to match S03. Credits-disabled outputs remain byte-identical.
+
+## Release-source identity
+
+The central release authority supplies the product version and build kind. The
+normal packager records the full source commit and constructs the title subtitle:
+`Pre-Release · <seven-character commit>`, `RC<n> · <commit>`, or `Dev · <commit>`.
+Official releases omit the subtitle. The source catalog retains canonical,
+commit-independent title data, avoiding a generated-file/commit hash cycle.
+
+Apply verifies the pristine source, upstream output and complete reconstructed
+image before stamping only the reserved 59-byte title-data region. The package
+manifest supplies the build identity; installation metadata records the actual
+stamped executable hash. All other output bytes remain covered by the canonical
+recipe hash. The native hook remains 155 bytes and uses the original tile printer.
+Its middle-dot separator is the existing period moved one tile row upward, since
+the printer accepts seven-bit glyph indices rather than Unicode. Visual placement
+requires Windows acceptance.
+
+Build the final candidate from the exact commit intended for the release tag.
+A later source commit requires rebuilding and revalidating the candidate. Promote
+that commit to Experience by fast-forward after acceptance to retain its identity.
+The normal Windows workflow packages the compact catalog; integrity validation
+rejects a redundant legacy recipe ZIP. No game assets are included.

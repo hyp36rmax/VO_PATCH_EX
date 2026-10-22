@@ -1,7 +1,7 @@
 """Distribution integrity and game-asset exclusion, no Windows execution claim."""
 from pathlib import Path
 import hashlib,json,sys,zipfile
-from compact_catalog import Catalog
+from compact_catalog import Catalog, NAME
 root=Path(sys.argv[1]).resolve();internal=root/'_internal';ex=internal/'experience'
 manifest=json.loads((root/'PACKAGE-SHA256.json').read_text())
 assert {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()} == set(manifest) | {'PACKAGE-SHA256.json'}, 'Unmanifested package files'
@@ -21,6 +21,8 @@ assert (root/'v-on-patcher.exe').read_bytes()[:2]==b'MZ'
 assert (ex/'payload/vodisplay.dll').read_bytes()[:2]==b'MZ'
 index=json.loads((ex/'catalog/catalog.json').read_text())
 assert len(index['entries'])==2 * (1 << len(index['keys']))
+assert (ex/'catalog'/NAME).is_file(), 'Production catalog must use compact storage'
+assert not (ex/'catalog/recipes.zip').exists(), 'Redundant legacy catalog must not ship'
 catalog=Catalog(ex/'catalog')
 for name,entry in index['entries'].items():
  data=catalog.read(name);assert hashlib.sha256(data).hexdigest()==entry['sha256']

@@ -9,12 +9,10 @@ bits 32
 ; with lower case in it gets the set that has lower case, which is why this
 ; one can be mixed case.
 ;
-; The column is worked out from the length rather than fixed, so the line
-; stays against the right edge whatever the version is. It has to be: a
-; character is two cells, the map is 81 wide and nothing wraps it, so a
-; column past the end writes into the start of the next row. A fixed column
-; that suits a tag reading 0.8.7 puts a character on the far left when the
-; version is a commit's SHA.
+; Build-time title data supplies cursor positions and ASCII text runs. The
+; subordinate build label uses the existing mixed-case face on the next row.
+; Its middle dot uses the original period one tile row higher because the
+; native printer strips the high bit rather than accepting Unicode.
 ;
 ; GDI was the obvious way and the wrong one here. It is what the pause text
 ; and HOLD TO SKIP use, but the game builds exactly two fonts at 0x5c8cd7 -
@@ -30,8 +28,7 @@ bits 32
 ; one - but it is a five-byte site on a path that runs every frame, which is
 ; what this needs. The displaced load is repeated at the end.
 ;
-; The string is not in here. The patcher writes it in after the blob, since
-; the version comes from the git tag and the blobs are built from source.
+; Reserved title data is filled only after source-locked reconstruction.
 
 extern CURSOR                   ; (column, row), cdecl
 extern PRINT                    ; (text), cdecl, from the cursor
@@ -58,8 +55,7 @@ ROW         equ 48
 TEXTLEN     equ 24              ; what the patcher has to write the version in
 
 titlever:
-    mov     eax, [MODE]
-    cmp     eax, ATTRACT
+    cmp     dword [MODE], ATTRACT
     jne     .out
     mov     eax, [SUBMODE]
     cmp     eax, PROMPT
@@ -69,33 +65,36 @@ titlever:
     cmp     eax, MENU
     jne     .out
 .draw:
-    mov     edx, text           ; right-aligned on RIGHT, two cells a
-    xor     ecx, ecx            ; character
-.len:
-    cmp     byte [edx + ecx], 0
-    je      .len_done
-    inc     ecx
-    jmp     .len
-.len_done:
-    mov     eax, RIGHT
-    sub     eax, ecx
-    sub     eax, ecx
-
-    push    ROW
+    pushad
+    mov     esi, positions
+.next:
+    movzx   eax, byte [esi]
+    test    eax, eax
+    jz      .done
+    movzx   edx, byte [esi+1]
+    push    edx
     push    eax
     call    CURSOR
     add     esp, 8
-
-    push    text
+    movzx   eax, byte [esi+2]
+    add     eax, strings
+    push    eax
     call    PRINT
     add     esp, 4
+    add     esi, 3
+    jmp     .next
+.done:
+    popad
 .out:
-    mov     eax, [PRIMARY]      ; the displaced load
+    mov     eax, [PRIMARY]
     ret
 
-; Preserve the existing blob footprint and text address: other annex
-; payloads must not move for a title-only correction.
-    times 130-($-$$) db 0x90
+; Four original-font text runs plus a zero terminator. The separator uses
+; the existing period glyph one tile row higher, not an unsupported byte.
+; Keep the existing footprint so no neighboring payload changes address.
+    times 95-($-$$) db 0x90
     db 1
-text:
-    times TEXTLEN db 0
+positions:
+    times 15 db 0
+strings:
+    times 44 db 0

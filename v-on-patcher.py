@@ -7125,22 +7125,23 @@ BLOBS = {
         'prompt': 0x86,
     }),
     'TITLEVER': (bytes.fromhex(
-        'a10000000083f8017545a10000000083f806740a83f817740583f8117531ba83'
-        '00000031c9803c0a00740341ebf7b84f00000029c829c86a3050e8fcffffff83'
-        'c4086883000000e8fcffffff83c404a100000000c39090909090909090909090'
-        '9090909090909090909090909090909090909090909090909090909090909090'
-        '909001000000000000000000000000000000000000000000000000'
+        '833d00000000017547a10000000083f806740a83f817740583f811753360be60'
+        '0000000fb60685c074250fb656015250e8fcffffff83c4080fb64602056f0000'
+        '0050e8fcffffff83c40483c603ebd461a100000000c390909090909090909001'
+        '0000000000000000000000000000000000000000000000000000000000000000'
+        '000000000000000000000000000000000000000000000000000000'
     ), (
-        (0x1, 'abs', 'MODE', 0),
-        (0xb, 'abs', 'SUBMODE', 0),
-        (0x1f, 'abs', '.', 131),
-        (0x3b, 'rel', 'CURSOR', -4),
-        (0x43, 'abs', '.', 131),
-        (0x48, 'rel', 'PRINT', -4),
-        (0x50, 'abs', 'PRIMARY', 0),
+        (0x2, 'abs', 'MODE', 0),
+        (0xa, 'abs', 'SUBMODE', 0),
+        (0x1f, 'abs', '.', 96),
+        (0x31, 'rel', 'CURSOR', -4),
+        (0x3d, 'abs', '.', 111),
+        (0x43, 'rel', 'PRINT', -4),
+        (0x51, 'abs', 'PRIMARY', 0),
     ), {
         'titlever': 0x0,
-        'text': 0x83,
+        'positions': 0x60,
+        'strings': 0x6f,
     }),
     'ACTIVATE': (bytes.fromhex(
         '58a30000000068190000005589e581ece0000000e90500000085c0751ec70500'
@@ -18236,43 +18237,62 @@ F5_FPS = bytes.fromhex(
 # it has. The blob carries zeros there: the version comes from the git tag,
 # and the blobs are built from source, so the patcher writes the string in
 # afterwards rather than the patch table carrying it.
-TITLEVER_LEN = 24
+TITLEVER_LEN = 59
+TITLE_GLYPH_WIDTHS = (1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1)
 
 
 def _check_titlever():
-    """The version goes in the last TITLEVER_LEN bytes of the blob, which
-    titlever.asm reserves as zeros. Growing the code without growing this
-    would write the version over the end of it."""
     if any(TITLEVER_CODE[-TITLEVER_LEN:]):
-        raise AssertionError('the last %d bytes of the titlever blob are not '
-                             'zeros' % TITLEVER_LEN)
+        raise AssertionError('title data must be reserved zeros')
     if not TITLEVER_CODE[-TITLEVER_LEN - 1]:
-        raise AssertionError('the titlever text field runs further back than '
-                             '%d bytes' % TITLEVER_LEN)
+        raise AssertionError('title data boundary marker missing')
 
 
-_check_titlever()
+if not os.environ.get('VONPATCHER_BOOTSTRAP'):
+    _check_titlever()
 
 
 def version_text():
-    """Release identity copied from the central authority by asm/build.py."""
-    text = 'VO PATCH EX ' + TITLE_RELEASE
-    if len(text.encode('ascii')) >= TITLEVER_LEN:
-        raise ValueError('Release title exceeds the native text field')
-    return text
+    return 'VO PATCH EX ' + TITLE_RELEASE
+
+
+def title_data(subtitle=''):
+    """Build original-font runs; a raised period supplies the middle dot."""
+    title = version_text().encode('ascii')
+    runs = [(79 - 2 * len(title), 48, title)]
+    if subtitle:
+        prefix, commit = subtitle.split(' · ')
+        prefix += ' '
+        # Native mixed-case font widths, measured in tile cells.
+        widths = TITLE_GLYPH_WIDTHS
+        width = lambda text: sum(widths[ord(ch) - 32] for ch in text)
+        x = 79 - width(prefix + '. ' + commit)
+        runs += [(x, 50, prefix.encode('ascii')),
+                 (x + width(prefix), 49, b'.'),
+                 (x + width(prefix + '. '), 50, commit.encode('ascii'))]
+    table = bytearray(15)
+    strings = bytearray()
+    for i, (column, row, text) in enumerate(runs):
+        if not 1 <= column <= 79:
+            raise ValueError('Title text exceeds the native tile map')
+        table[i*3:i*3+3] = bytes((column, row, len(strings)))
+        strings.extend(text + b'\0')
+    if len(strings) > 44:
+        raise ValueError('Title branding exceeds its reserved field')
+    return table + strings + bytes(44 - len(strings))
 
 
 def stamp_version(buf, build=RETAIL):
-    """Write the version into the titlever blob already sitting in buf.
-
-    Deliberately not a patch site. Every other byte the patcher writes is the
-    same for everyone, which is what lets selftest.py compare the whole
-    output against one digest; these two dozen change with the tag. So they
-    are written here, after apply_selected has run, and selftest checks the
-    file without them."""
-    text = version_text().encode('ascii') + b'\x00'
     at = site('TITLEVER').for_build(build) + len(TITLEVER_CODE) - TITLEVER_LEN
-    buf[at:at + len(text)] = text
+    buf[at:at + TITLEVER_LEN] = title_data()
+
+
+def stamp_build_identity(buf, subtitle, build=RETAIL):
+    """Stamp only verified reserved title data after recipe reconstruction."""
+    at = site('TITLEVER').for_build(build) + len(TITLEVER_CODE) - TITLEVER_LEN
+    if buf[at:at + TITLEVER_LEN] != title_data():
+        raise ValueError('Canonical title data does not match')
+    buf[at:at + TITLEVER_LEN] = title_data(subtitle)
 
 
 # Each site: (offset, original, patched).

@@ -2,7 +2,7 @@ name: "Build"
 
 on:
   push:
-    branches: [main, Controller-Expansion, Experience, feature/playable-bosses-v0181]
+    branches: [main, Controller-Expansion, Experience, feature/playable-bosses-v0181, maintenance/r0181-final-compact]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -53,6 +53,10 @@ jobs:
           python tools/experience/test_repository.py
           python tools/experience/test_diagnostics.py
           python tools/experience/test_normal_lifecycle.py
+          python tools/experience/test_compact_catalog.py
+          python tools/experience/test_release_version.py
+          python tools/attributiontest.py
+          python tools/release/test_experience.py
 
       # The window checks need a display. xvfb is what gives them one; with
       # nothing here tools/guitest.py skips itself and says so, which would
@@ -151,7 +155,7 @@ jobs:
 
   experience-native:
     needs: verify
-    if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181'
+    if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181' || github.ref_name == 'maintenance/r0181-final-compact'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -200,6 +204,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
 
     steps:
       - name: Preserve source bytes for catalog verification
@@ -219,7 +224,7 @@ jobs:
       # short SHA, so a downloaded artifact says which commit built it.
       # The window title, --version and the zip names read this one line.
       - name: Stamp the version
-        if: github.ref_name != 'Experience' && github.ref_name != 'feature/playable-bosses-v0181'
+        if: github.ref_name != 'Experience' && github.ref_name != 'feature/playable-bosses-v0181' && github.ref_name != 'maintenance/r0181-final-compact'
         shell: bash
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
@@ -340,13 +345,13 @@ jobs:
           fi
 
       - uses: actions/download-artifact@v4
-        if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181'
+        if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181' || github.ref_name == 'maintenance/r0181-final-compact'
         with:
           name: experience-native
           path: build/experience-native
 
       - name: Assemble Experience Windows package
-        if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181'
+        if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181' || github.ref_name == 'maintenance/r0181-final-compact'
         shell: bash
         run: |
           python tools/experience/catalog_input.py unpack tools/experience/ci/catalog.json.xz build/catalog
@@ -369,12 +374,31 @@ jobs:
               assert archive.testzip() is None
           PYCODE
 
+      - name: Verify compact loader and independent installed runtime
+        if: github.ref_name == 'Experience' || github.ref_name == 'feature/playable-bosses-v0181' || github.ref_name == 'maintenance/r0181-final-compact'
+        shell: python
+        run: |
+          import pathlib, shutil, subprocess
+          root = pathlib.Path('dist/experience').resolve()
+          subprocess.run([str(root/'_internal/python.exe'), '-B', 'tools/experience/test_normal_package.py', str(root)], check=True)
+          code = "from pathlib import Path; from compact_catalog import Catalog; c=Catalog(Path('experience/catalog')); assert len(c.index['entries'])==2048; [c.read(n) for n in c.index['entries']]; print('PASS shipped compact loader: 2048 recipes')"
+          subprocess.run([str(root/'_internal/python.exe'), '-B', '-c', code], cwd=root/'_internal', check=True)
+          runtime = pathlib.Path('independent game é/experience-runtime').resolve()
+          shutil.copytree(root/'_internal/experience/payload/experience-runtime', runtime)
+          unavailable = root.with_name('patcher unavailable')
+          root.rename(unavailable)
+          result = runtime.parent/'runtime-result.txt'
+          code = "import pathlib,sys,ctypes,lzma,ssl; import normal_lifecycle as n; p=pathlib.Path(sys.argv[1]); assert n.run(p.parent,lambda:None,lambda:None) is None; p.write_text('PASS independent bundled runtime, default-Off lifecycle and native extensions')"
+          subprocess.run([str(runtime/'pythonw.exe'), '-B', '-c', code, str(result)], cwd=runtime.parent, check=True, timeout=60)
+          assert result.read_text().startswith('PASS independent')
+          unavailable.rename(root)
+
       # Two zips: -win with the exe and _internal/ at its top, -python with
       # the script and the netplay DLL beside it (tools/package.py). Not
       # -src: GitHub adds its own "Source code" zip to every release, and
       # two of those confuse.
       - name: Zip
-        if: github.ref_type != 'tag' && github.ref_name != 'Experience' && github.ref_name != 'feature/playable-bosses-v0181'
+        if: github.ref_type != 'tag' && github.ref_name != 'Experience' && github.ref_name != 'feature/playable-bosses-v0181' && github.ref_name != 'maintenance/r0181-final-compact'
         shell: bash
         run: |
           python tools/package.py dist "$artifact"

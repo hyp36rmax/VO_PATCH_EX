@@ -14,27 +14,49 @@ assert v.LABEL==old.LABEL and v.REPO_URL==old.REPO_URL and v.LOGO_CREDIT==old.LO
 assert {k for k in v.BLOBS if v.BLOBS[k]!=old.BLOBS[k]}=={'TITLEVER'}
 assert 'Unified Overlay Menu Expansion: not included.' in v.EX_ATTRIBUTION
 for edition in (v.RETAIL,v.JPRE):
- for mode,state,visible in ((1,6,True),(1,0x17,True),(1,0x11,True),(1,7,False),(4,6,False)):
-  mu=Uc(UC_ARCH_X86,UC_MODE_32);mu.mem_map(0x400000,0x4000000);mu.mem_map(0x7000000,0x10000)
-  origin=v.cave_va('TITLEVER',edition);code=v.link('TITLEVER',edition)
-  mu.mem_write(origin,code);mu.mem_write(origin+len(code)-v.TITLEVER_LEN,v.version_text().encode()+b'\0')
-  for sym,val in (('MODE',mode),('SUBMODE',state),('PRIMARY',0x12345678)):
-   mu.mem_write(v.symbol_va(sym,edition),struct.pack('<I',val))
-  cursor=v.symbol_va('CURSOR',edition);printer=v.symbol_va('PRINT',edition)
-  for addr in (cursor,printer):mu.mem_write(addr,b'\xc3')
-  stop=0x7001000;sp=0x700f000;mu.mem_write(sp,struct.pack('<I',stop));mu.reg_write(UC_X86_REG_ESP,sp)
-  calls=[]
-  def hook(machine,addr,size,user):
-   stack=machine.reg_read(UC_X86_REG_ESP)
-   if addr==cursor:calls.append(('cursor',struct.unpack('<II',machine.mem_read(stack+4,8))))
-   if addr==printer:
-    ptr=struct.unpack('<I',machine.mem_read(stack+4,4))[0]
-    text=bytes(machine.mem_read(ptr,64)).split(b'\0')[0].decode();calls.append(('text',text))
-  mu.hook_add(UC_HOOK_CODE,hook);mu.emu_start(origin,stop,count=1000)
-  assert mu.reg_read(UC_X86_REG_EAX)==0x12345678 and mu.reg_read(UC_X86_REG_ESP)==sp+4
-  expected=[('cursor',(79-2*len(v.version_text()),48)),('text','VO PATCH EX 0.18.1')]
-  assert calls==(expected if visible else []),(edition.short,calls)
- print('PASS',edition.short,'title states, single release line, no development draw, displaced load and stack')
+ for subtitle in ('', 'Pre-Release · abc1234', 'RC2 · abc1234', 'Dev · abc1234'):
+  for mode,state,visible in ((1,6,True),(1,0x17,True),(1,0x11,True),(1,7,False),(4,6,False)):
+   mu=Uc(UC_ARCH_X86,UC_MODE_32);mu.mem_map(0x400000,0x4000000);mu.mem_map(0x7000000,0x10000)
+   origin=v.cave_va('TITLEVER',edition);code=v.link('TITLEVER',edition)
+   mu.mem_write(origin,code);mu.mem_write(origin+len(code)-v.TITLEVER_LEN,bytes(v.title_data(subtitle)))
+   for sym,val in (('MODE',mode),('SUBMODE',state),('PRIMARY',0x12345678)):
+    mu.mem_write(v.symbol_va(sym,edition),struct.pack('<I',val))
+   cursor=v.symbol_va('CURSOR',edition);printer=v.symbol_va('PRINT',edition)
+   for addr in (cursor,printer):mu.mem_write(addr,b'\xc3')
+   stop=0x7001000;sp=0x700f000;mu.mem_write(sp,struct.pack('<I',stop));mu.reg_write(UC_X86_REG_ESP,sp)
+   calls=[]
+   def hook(machine,addr,size,user):
+    stack=machine.reg_read(UC_X86_REG_ESP)
+    if addr==cursor:calls.append(('cursor',struct.unpack('<II',machine.mem_read(stack+4,8))))
+    if addr==printer:
+     ptr=struct.unpack('<I',machine.mem_read(stack+4,4))[0]
+     text=bytes(machine.mem_read(ptr,64)).split(b'\0')[0].decode();calls.append(('text',text))
+   mu.hook_add(UC_HOOK_CODE,hook);mu.emu_start(origin,stop,count=1000)
+   assert mu.reg_read(UC_X86_REG_EAX)==0x12345678 and mu.reg_read(UC_X86_REG_ESP)==sp+4
+   data=v.title_data(subtitle);expected=[]
+   for i in range(0,15,3):
+    column,row,offset=data[i:i+3]
+    if not column:break
+    text=bytes(data[15+offset:]).split(b'\0')[0].decode('ascii')
+    expected += [('cursor',(column,row)),('text',text)]
+   assert expected[0:2]==[('cursor',(43,48)),('text','VO PATCH EX 0.18.1')]
+   if subtitle:
+    assert len(expected)==8 and expected[5]==('text','.') and expected[4][1][1]==49
+    assert expected[-1]==('text','abc1234')
+   else:assert len(expected)==2
+   assert calls==(expected if visible else []),(edition.short,calls)
+  print('PASS',edition.short,'title states, release/prerelease/RC/development runs, safe middle-dot glyph, displaced load and stack')
+# Refuse stamping unverified title bytes or overrunning the reserved data.
+for edition in (v.RETAIL, v.JPRE):
+ at=int(v.site('TITLEVER').for_build(edition))+len(v.TITLEVER_CODE)-v.TITLEVER_LEN
+ image=bytearray(at+v.TITLEVER_LEN);v.stamp_version(image,edition)
+ image[at]^=1
+ try:v.stamp_build_identity(image,'Pre-Release · abc1234',edition)
+ except ValueError:pass
+ else:raise AssertionError('Altered canonical title accepted')
+try:v.title_data('Pre-Release · '+'a'*40)
+except ValueError:pass
+else:raise AssertionError('Oversized title accepted')
 print('PASS exact upstream credits/resources/constants and all non-title blobs preserved')
 # Resource failure behavior and Restore Original, exercised only on copies.
 import tempfile

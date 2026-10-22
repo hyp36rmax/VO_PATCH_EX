@@ -4,9 +4,10 @@ Only the packaged copy binds this adapter. Offline recipes are verified against
 both the pristine executable and the exact output of upstream Apply. No assembler
 or developer runtime is used on the player's machine.
 """
-import hashlib,json,os,shutil,tempfile
+import hashlib,json,os,tempfile
 from pathlib import Path
 from compact_catalog import Catalog
+from release_version import build_identity
 
 JOURNAL='.vo-ex-backup'
 def sha(data):return hashlib.sha256(data).hexdigest()
@@ -105,7 +106,11 @@ def bind(cls,scope,package):
                 if off<end or off+len(block)>len(result):raise ValueError('Invalid patch data range')
                 result[off:off+len(block)]=block;end=off+len(block)
             if sha(result)!=r['final']:raise ValueError('Generated image integrity failure')
-            version=dict(payload['version'],game=self.build.short,image_sha256=r['final'],movie_framing=bool(wanted.get('movie')))
+            identity=build_identity(payload['version']['revision'],payload['version']['kind'],payload['version'].get('rc'))
+            if any(payload['version'].get(k)!=value for k,value in identity.items()):raise ValueError('Build identity mismatch')
+            if r['mask'] & (1<<index['keys'].index('credits')):
+                scope['stamp_build_identity'](result,identity['subtitle'],self.build)
+            version=dict(payload['version'],game=self.build.short,image_sha256=sha(result),movie_framing=bool(wanted.get('movie')))
             assets['experience-version.json']=(json.dumps(version,indent=2)+'\n').encode()
             # Existing controller helper is owned too: restore/remove exactly what
             # upstream Apply installed, while keeping upstream's game .bak files.

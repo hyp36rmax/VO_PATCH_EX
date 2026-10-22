@@ -17,6 +17,9 @@ old.by_key=cache(old.by_key);new.by_key=cache(new.by_key)
 a,b=Catalog(sys.argv[1]),Catalog(sys.argv[2])
 assert a.index['keys']==b.index['keys'] and set(a.index['entries'])==set(b.index['entries'])
 changed=unchanged=0
+from release_version import build_identity
+revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+subtitle=build_identity(revision)['subtitle']
 for folder in map(Path,sys.argv[3:]):
  raw=(folder/'v_on.exe').read_bytes();md5=hashlib.md5(raw).hexdigest();edition=new.BUILDS[md5]
  for mask in range(1<<len(b.index['keys'])):
@@ -40,6 +43,12 @@ for folder in map(Path,sys.argv[3:]):
    assert images[0][start:end]!=images[1][start:end]
    assert b'VO PATCH EX 0.18.1\0' in images[1][start:end]
    assert b'V-On Patcher dev' not in images[1] and b'VO PATCH EX 0.1-dev' not in images[1]
+   canonical=images[1][:]
+   new.stamp_build_identity(images[1],subtitle,edition)
+   data_at=end-new.TITLEVER_LEN
+   assert images[1][:data_at]==canonical[:data_at] and images[1][end:]==canonical[end:]
+   assert images[1][data_at:end]==new.title_data(subtitle)
+   assert revision[:7].encode()+b'\0' in images[1][data_at:end]
    changed+=1
   else:
    assert images[0]==images[1] and ra==rb,name

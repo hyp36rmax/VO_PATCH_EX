@@ -34,7 +34,8 @@ jobs:
       - name: Assemble and verify versioned package
         shell: bash
         run: |
-          python tools/experience/package_normal.py candidate baseline inputs/catalog wrapper inputs/payload/vodisplay.dll
+          python tools/experience/catalog_input.py unpack tools/experience/ci/catalog.json.xz build/catalog
+          python tools/experience/package_normal.py candidate baseline build/catalog wrapper inputs/payload/vodisplay.dll
           python tools/experience/test_normal_package.py candidate
           python tools/experience/test_release_version.py candidate
       - name: Verify shipped interpreter and launcher

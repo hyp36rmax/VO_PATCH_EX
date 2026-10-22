@@ -26,7 +26,12 @@ for source in map(Path,sys.argv[2:]):
   exe.write_bytes(pristine)
   for wanted in (v.default_state(),dict(v.default_state(),hires=False,nodisc=False,debugbox=False,movie=False,credits=False), dict(v.default_state(),bossunlock=True), dict(v.default_state(),bosses=True), dict(v.default_state(),bosses=True,bossunlock=True)):
    ok,log=p.apply(wanted);assert ok,log
-   assert json.loads((root/'experience-version.json').read_text())['movie_framing']==bool(wanted.get('movie'))
+   installed=json.loads((root/'experience-version.json').read_text())
+   assert installed['movie_framing']==bool(wanted.get('movie'))
+   assert installed['image_sha256']==hashlib.sha256((root/'v_on.exe').read_bytes()).hexdigest()
+   if wanted.get('credits'):
+    at=int(v.site('TITLEVER').for_build(p.build))+len(v.TITLEVER_CODE)-v.TITLEVER_LEN
+    assert (root/'v_on.exe').read_bytes()[at:at+v.TITLEVER_LEN]==v.title_data(installed['subtitle'])
    assert (root/'vodisplay.dll').is_file() and (root/'EXPORT-DIAGNOSTICS.cmd').is_file()
    assert (root/adapter.JOURNAL/'ownership.json').is_file()
    assert not p.apply(wanted)[0]

@@ -1,13 +1,15 @@
 """Assemble the installable distribution using upstream's Windows launcher."""
 import argparse,hashlib,json,os,shutil,subprocess
-from release_version import VERSION as RELEASE_VERSION, validate_release_tag
+from release_version import VERSION as RELEASE_VERSION, validate_release_tag, build_identity
 from pathlib import Path
 from compact_catalog import pack, NAME
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
- p=argparse.ArgumentParser();p.add_argument('output',type=Path);p.add_argument('baseline',type=Path);p.add_argument('catalog',type=Path);p.add_argument('wrapper',type=Path);p.add_argument('helper',type=Path);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('output',type=Path);p.add_argument('baseline',type=Path);p.add_argument('catalog',type=Path);p.add_argument('wrapper',type=Path);p.add_argument('helper',type=Path);p.add_argument('--build-kind',choices=('release','prerelease','rc','development'),default='prerelease');p.add_argument('--rc',type=int);a=p.parse_args()
  validate_release_tag(os.environ.get('GITHUB_REF_NAME', '') if os.environ.get('GITHUB_REF_TYPE') == 'tag' else '')
+ if subprocess.run(['git','diff','--quiet','HEAD','--'],cwd=ROOT).returncode:
+  raise ValueError('Commit tracked source changes before building an identified package')
  out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
  shutil.copy2(a.baseline/'v-on-patcher.exe',out/'v-on-patcher.exe')
  shutil.copytree(a.baseline/'_internal',out/'_internal',ignore=shutil.ignore_patterns('__pycache__','*.pyc','_ctypes_test.pyd'))
@@ -42,7 +44,8 @@ def main():
  shutil.copy2(HERE/'EXPORT-DIAGNOSTICS.cmd',payload/'EXPORT-DIAGNOSTICS.cmd')
  # Package the notices for the exact dependencies selected by the build.
  assert '__version__ = "2026.07.22"' in (internal/'Lib/site-packages/certifi/__init__.py').read_text()
- version={'release':RELEASE_VERSION,'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'wrapper_sha256':sha(payload/'ddraw.dll'),'helper_sha256':sha(payload/'vodisplay.dll'),'experience':'Experience'}
+ identity=build_identity(subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),a.build_kind,a.rc)
+ version=dict(identity, **{'wrapper_sha256':sha(payload/'ddraw.dll'),'helper_sha256':sha(payload/'vodisplay.dll'),'experience':'Experience'})
  manifest={'version':version,'files':{f.relative_to(payload).as_posix().replace('\\','/'):sha(f) for f in sorted(payload.rglob('*')) if f.is_file()}}
  (experience/'payload-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  notices=out/'Licenses';notices.mkdir();shutil.copy2(ROOT/'LICENSE',notices/'Pairomaniac-MIT.txt');shutil.copy2(a.wrapper/'LICENSE',notices/'cnc-ddraw-MIT.txt');shutil.copy2(internal/'LICENSE.txt',notices/'Python.txt')

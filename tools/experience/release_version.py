@@ -17,3 +17,22 @@ def configure(scope):
     scope['TITLE'] = 'V-On Patcher EX ' + VERSION
     scope['EX_ATTRIBUTION'] = re.sub(r'^VO PATCH EX \S+', 'VO PATCH EX ' + VERSION,
                                      scope['EX_ATTRIBUTION'])
+
+
+def build_identity(revision, kind='prerelease', rc=None):
+    """Resolve immutable package identity without embedding a source hash in source."""
+    if not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise ValueError('A complete release-source commit is required')
+    labels = {'release': '', 'prerelease': 'Pre-Release', 'development': 'Dev'}
+    if kind == 'rc':
+        if not isinstance(rc, int) or rc < 1:
+            raise ValueError('RC number must be positive')
+        label = 'RC%d' % rc
+    elif kind in labels:
+        label = labels[kind]
+    else:
+        raise ValueError('Unknown build kind')
+    subtitle = (label + ' · ' + revision[:7]) if label else ''
+    return {'release': VERSION, 'revision': revision, 'kind': kind,
+            'rc': rc if kind == 'rc' else None, 'title': 'VO PATCH EX ' + VERSION.removeprefix('v'),
+            'subtitle': subtitle}

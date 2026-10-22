@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 import unittest
-from release_version import VERSION, configure, validate_release_tag
+from release_version import VERSION, configure, validate_release_tag, build_identity
 
 
 class ProductVersion(unittest.TestCase):
@@ -25,6 +25,14 @@ class ProductVersion(unittest.TestCase):
         validate_release_tag('')
         with self.assertRaises(ValueError):
             validate_release_tag('v0.18.0-experience.2')
+
+    def test_build_kinds(self):
+        revision = '0123456789abcdef0123456789abcdef01234567'
+        for kind, rc, label in [('release', None, ''), ('prerelease', None, 'Pre-Release'), ('rc', 2, 'RC2'), ('development', None, 'Dev')]:
+            identity = build_identity(revision, kind, rc)
+            self.assertEqual(identity['subtitle'], label + ' · 0123456' if label else '')
+        for bad in ('', 'abcdef0', 'not-a-commit'):
+            with self.assertRaises(ValueError): build_identity(bad)
 
     def test_documented_release(self):
         root = Path(__file__).resolve().parents[2]
@@ -50,6 +58,9 @@ if __name__ == '__main__':
         assert VERSION in (package/'READ-ME.txt').read_text()
         metadata = json.loads((internal/'experience/payload-manifest.json').read_text())
         assert metadata['version']['release'] == VERSION
+        identity = build_identity(metadata['version']['revision'],metadata['version']['kind'],metadata['version'].get('rc'))
+        assert all(metadata['version'][k] == value for k, value in identity.items())
+        scope['title_data'](identity['subtitle'])
         output = subprocess.check_output([sys.executable, str(internal/'v-on-patcher.py'), '--version'], text=True)
         assert output.strip() == VERSION, output
         print('PASS packaged window/About globals, CLI, readme and installed version metadata')
