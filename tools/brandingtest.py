@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""B01 artwork, UI content and unchanged game/installation contract checks."""
+"""B01 artwork, UI content and original artwork and installation contract checks."""
 import ast
 import base64
 import hashlib
@@ -21,7 +21,10 @@ with tempfile.TemporaryDirectory() as td:
     before = runpy.run_path(str(p))
 for key in ('LABEL', 'REPO_URL', 'LOGO_CREDIT', 'ICON_PNG', 'ESSENTIAL', 'ABOUT'):
     assert now[key] == before[key], key
-assert {k: v for k, v in now['BLOBS'].items() if k != 'BOSSES'} == before['BLOBS']
+assert {k: v for k, v in now['BLOBS'].items() if k not in ('BOSSES', 'TITLEVER')} == {k: v for k, v in before['BLOBS'].items() if k != 'TITLEVER'}
+# Native execution and all title data formats are checked by attributiontest.py.
+assert len(now['BLOBS']['TITLEVER'][0]) == 155
+assert hashlib.sha256(now['BLOBS']['TITLEVER'][0]).hexdigest() == 'db8ef24f1dea966f4b99c2e390580bfa0398c3f698e96405f2cfb912e8f9a673'
 assert now['EXTRA'] == before['EXTRA'] + ('bosses', 'bossunlock')
 assert now['BOSSES_AUTHOR'] == 'Vortyne'
 assert now['BY_KEY']['padxinput'] == before['BY_KEY']['padxinput']
@@ -31,10 +34,10 @@ assert now['EX_VERSION'] == '0.1-dev'
 assert now['PROJECT_URL'] == 'https://github.com/hyp36rmax/VO_PATCH_EX'
 for name in ('assets/VONPatcherLogo1.png', 'assets/VONPatcherIcon.png', 'assets/icon.ico'):
     assert (ROOT / name).read_bytes() == original(name), name
-# Restrict function changes to About, the information popup and no installation code.
+# Preserve upstream Restore/load; title stamping has its own native/data checks.
 def funcs(text):
     return {n.name: ast.dump(n, include_attributes=False) for n in ast.walk(ast.parse(text))
-            if isinstance(n, ast.FunctionDef) and n.name in ('restore', 'load', 'stamp_version')}
+            if isinstance(n, ast.FunctionDef) and n.name in ('restore', 'load')}
 assert funcs(source) == funcs(original('v-on-patcher.py').decode())
 base = Image.open(ROOT / 'assets/VONPatcherLogo1.png').convert('RGBA')
 ex = Image.open(ROOT / 'assets/EX-approved.png').convert('RGBA')
@@ -57,7 +60,7 @@ assert about.index('VO PATCH EX') < about.index('Based on:') < about.index('Orig
 assert 'self._patch_body(parent, ABOUT, None)' in about and 'LOGO_PNG' not in about
 assert 'wraplength=380' not in about
 assert 'height=min(height, limit)' in source and 'scrollregion=' in source
-print('PASS exact source provenance, original artwork/icon, composition, alpha, embedded size, title/About, appended hires, unchanged XInput, existing blobs and Restore/load/version functions')
+print('PASS exact source provenance, original artwork/icon, composition, alpha, embedded size, title/About, appended hires, unchanged XInput, non-title blobs and Restore/load functions')
 print('NEEDS VALIDATION: physical Windows layout, DPI, popup scrolling and clickable links')
 
 from fractions import Fraction
