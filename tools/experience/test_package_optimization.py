@@ -15,7 +15,7 @@ removed = {
     '_internal/experience/catalog/game_profiles.h',
 }
 assert set(a) - set(b) == removed
-assert not set(b) - set(a)
+assert not set(b) - set(a), sorted(set(b) - set(a))
 allowed = {'PACKAGE-SHA256.json', '_internal/experience/payload-manifest.json',
            '_internal/experience/catalog/recipes.zip'}
 changed = {n for n in b if a[n].read_bytes() != b[n].read_bytes()}
